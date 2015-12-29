@@ -1,0 +1,134 @@
+#pragma once
+
+#include "Types.h"
+#include "Resources.h"
+#include "Collections.h"
+#include "Hash.h"
+
+namespace Essence {
+
+template<typename T>
+Array<T> wrap_c_array(T* ptr, u32 size) {
+	Array<T> wrapped;
+	wrapped.Allocator = nullptr;
+	wrapped.Capacity = wrapped.Size = size;
+	wrapped.DataPtr = ptr;
+	return std::move(wrapped);
+}
+
+template<typename T>
+struct array_view {
+	T*	elements;
+	u32 num;
+
+	array_view() = default;
+	array_view(T* ptr, u32 size) : elements(ptr), num(size) {};
+
+	T& operator [](i64 index) {
+		Check(index >= 0 && index < (i32)num);
+		return elements[index];
+	}
+
+	T const & operator [](i64 index) const {
+		Check(index >= 0 && index < (i32)num);
+		return elements[index];
+	}
+};
+
+template<typename T>
+void allocate_array(array_view<T> *a, u32 size, IAllocator* allocator) {
+	(*a) = array_view<T>((T*)allocator->Allocate(sizeof(T) * size, alignof(T)), size);
+}
+
+template<typename T>
+void zero_array(array_view<T> *a) {
+	ZeroMemory(a->elements, sizeof(T) * a->num);
+}
+
+typedef GenericHandle32<20, TYPE_ID(Model)> model_handle;
+
+struct mesh_vertex_t {
+	float3	position;
+	float3	normal;
+	float2	texcoord0;
+	u32		boneIndices;
+	float4	boneWeights;
+};
+
+struct animation_skeleton_t {
+	u32					nodes_num;
+	u32					bones_num;
+
+	xmmatrix*			node_local_transforms;
+	u16*				node_parents;
+	u16*				node_channel_indices;
+	u16*				bone_node_indices;
+	xmmatrix*			bone_offsets;
+};
+
+struct position_key_t {
+	float3a	value;
+	float	time;
+};
+
+struct rotation_key_t {
+	float4	value;
+	float	time;
+};
+
+struct animation_channel_t {
+	u32				position_keys_num;
+	u32				rotation_keys_num;
+	position_key_t*	position_keys;
+	rotation_key_t*	rotation_keys;
+};
+
+struct animation_t {
+	float					ticks_per_second;
+	float					duration; // in ticks
+	u32						channels_num;
+	animation_channel_t*	channels;
+	position_key_t*			position_keys;
+	rotation_key_t*			rotation_keys;
+};
+
+struct animation_state_t {
+	float	last_time;
+	float	last_scaled_time;
+	u16*	last_position_keys;
+	u16*	last_rotation_keys;
+};
+
+struct mesh_draw_t {
+	u32 index_count;
+	u32 start_index;
+	u32 base_vertex;
+};
+
+struct model_t {
+	resource_handle			vertex_buffer;
+	resource_handle			index_buffer;
+	vertex_factory_handle	vertex_layout;
+
+	u32						vertices_num;
+	u32						indices_num;
+
+	array_view<mesh_draw_t>	submeshes;
+	animation_skeleton_t	skeleton;
+	array_view<animation_t> animations;
+};
+
+void FreeModelsMemory();
+void LoadModel(ResourceNameId name);
+
+void InitAnimationState(animation_state_t*, model_t const*, u32);
+void FreeAnimationState(animation_state_t* AnimationState);
+
+model_handle		GetModel(ResourceNameId);
+model_t const*		GetModelRenderData(model_handle);
+
+void calculate_animation_frames( animation_t const* Animation, animation_state_t* AnimationState, float Time, Array<xmmatrix> *outTransforms);
+void calculate_animation( animation_skeleton_t const* Skeleton, animation_t const* Animation, animation_state_t* AnimationState, float Time, Array<xmmatrix> *outNodeTransforms, Array<xmmatrix> *outTransforms);
+void calculate_animation(animation_skeleton_t const* Skeleton, animation_t const* Animation, animation_state_t* AnimationState, float Time, xmmatrix *outTransforms);
+
+}

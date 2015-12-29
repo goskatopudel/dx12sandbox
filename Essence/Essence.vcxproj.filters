@@ -1,0 +1,141 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{c402c131-ed9c-41f5-9775-7d237fc2c4eb}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Source">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="External">
+      <UniqueIdentifier>{46a0abd4-e1ba-48d6-a4f4-736853b6ad2a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Remotery">
+      <UniqueIdentifier>{0fda61c2-dcfc-4869-8f8a-52352b41b004}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Algorithms.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="AssertionMacros.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="GlobalMacros.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Hash.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Types.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Memory.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Hashmap.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Array.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Collections.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Thread.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Strings.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Essence.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Debug.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Scheduler.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Ringbuffer.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Random.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Freelist.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Files.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Maths.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="CompactTable.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Platform.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="remotery\Remotery.h">
+      <Filter>Remotery</Filter>
+    </ClInclude>
+    <ClInclude Include="Profiler.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="MurmurHash.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Memory.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Thread.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="String.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Strings.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Debug.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Scheduler.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Essence.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Random.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Hash.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Files.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Assertion.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="remotery\Remotery.c">
+      <Filter>Remotery</Filter>
+    </ClCompile>
+    <ClCompile Include="Profiler.cpp">
+      <Filter>Core\Source</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
