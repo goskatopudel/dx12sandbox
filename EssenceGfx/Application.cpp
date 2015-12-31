@@ -1,6 +1,5 @@
 #include "Application.h"
 #include "Scheduler.h"
-#include "Profiler.h"
 
 namespace Essence {
 

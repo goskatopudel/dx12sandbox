@@ -14,7 +14,6 @@
 #include "Model.h"
 #include "UIRendering.h"
 #include "imgui/imgui.h"
-#include "Profiler.h"
 #include "Shader.h"
 
 #include "Hashmap.h"

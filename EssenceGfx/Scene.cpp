@@ -2,7 +2,6 @@
 #include "Application.h"
 #include "Camera.h"
 #include "Scheduler.h"
-#include "Profiler.h"
 
 extern Essence::resource_handle RT_A;
 extern Essence::resource_handle DepthBuffer;

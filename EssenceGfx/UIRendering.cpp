@@ -5,7 +5,6 @@
 #include "Device.h"
 #include "Resources.h"
 #include "Application.h"
-#include "Profiler.h"
 
 namespace Essence {
 

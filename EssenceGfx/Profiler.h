@@ -3,7 +3,7 @@
 #include "remotery\Remotery.h"
 
 struct ProfileScopeGuard {
-	~ProfileScopeGuard() {
+	inline ~ProfileScopeGuard() {
 		rmt_EndCPUSample();
 	}
 };
