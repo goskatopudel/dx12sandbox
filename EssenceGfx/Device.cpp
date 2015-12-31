@@ -7,14 +7,6 @@
 
 namespace Essence {
 
-HANDLE CreateEvent() {
-	return CreateEventEx(nullptr, FALSE, FALSE, EVENT_ALL_ACCESS);
-}
-
-void DestroyEvent(HANDLE h) {
-	CloseHandle(h);
-}
-
 IDXGIFactory4*		GDXGIFactory;
 IDXGIAdapter3*		GDXGIAdapter;
 ID3D12Debug*		GDebugLayer;
@@ -26,6 +18,8 @@ u32					SwapBuffersNum;
 u32					CurrentSwapBufferIndex;
 ID3D12Resource*		SwapChainBuffer[MaxSwapBuffersNum];
 HWND				GHWND;
+
+const DXGI_FORMAT	BackbufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 
 D3D12_FEATURE_DATA_D3D12_OPTIONS				GD12Options;
@@ -49,6 +43,14 @@ void SetDebugName(ID3D12DeviceChild * child, const char * name) {
 void PrintAdaptersList();
 void PrintDeviceInfo(ID3D12Device* device);
 void PrintAdapterInfo(IDXGIAdapter3* adapter);
+
+HANDLE CreateEvent() {
+	return CreateEventEx(nullptr, FALSE, FALSE, EVENT_ALL_ACCESS);
+}
+
+void DestroyEvent(HANDLE h) {
+	CloseHandle(h);
+}
 
 void InitDevice(
 	HWND	hwnd,
@@ -190,7 +192,7 @@ void CreateSwapChain(ID3D12CommandQueue* queue, u32 buffersNum) {
 	DXGI_SWAP_CHAIN_DESC descSwapChain;
 	ZeroMemory(&descSwapChain, sizeof(descSwapChain));
 	descSwapChain.BufferCount = buffersNum;
-	descSwapChain.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	descSwapChain.BufferDesc.Format = BackbufferFormat;
 	descSwapChain.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	descSwapChain.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	descSwapChain.OutputWindow = GHWND;
@@ -218,9 +220,29 @@ void Present(u32 vsync) {
 	CurrentSwapBufferIndex = (CurrentSwapBufferIndex + 1) % SwapBuffersNum;
 }
 
-void ResizeSwapChain() {
+void ResizeSwapChain(u32 width, u32 height) {
+	DeregisterSwapChainBuffers();
 
-	/*GSwapChain->ResizeBuffers(SwapBuffersNum, GDisplaySettings.resolution.x, GDisplaySettings.resolution.y, GBackbufferFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH);*/
+	for (auto i : i32Range(MaxSwapBuffersNum)) {
+		if (SwapChainBuffer[i]) {
+			SwapChainBuffer[i]->Release();
+			SwapChainBuffer[i] = nullptr;
+		}
+	}
+
+	Check(GSwapChain);
+
+	VerifyHr(GSwapChain->ResizeBuffers(SwapBuffersNum, width, height, BackbufferFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
+
+	for (auto i : i32Range(SwapBuffersNum)) {
+		ID3D12Resource* resource;
+		VerifyHr(GSwapChain->GetBuffer(i, IID_PPV_ARGS(&resource)));
+		SwapChainBuffer[i] = resource;
+
+		RegisterSwapChainBuffer(resource, i);
+	}
+
+	CurrentSwapBufferIndex = 0;
 }
 
 DXGI_QUERY_VIDEO_MEMORY_INFO GetLocalMemoryInfo() {

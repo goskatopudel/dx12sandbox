@@ -120,6 +120,9 @@ void DescriptorAllocator::FenceTemporaryAllocations(GPUFenceHandle fence) {
 }
 
 void DescriptorAllocator::Free(descriptor_allocation_t allocation) {
+	if (!allocation.size) {
+		return;
+	}
 	Check(allocation.allocator == this);
 	auto bucket = find_log_2(allocation.size);
 

@@ -9,6 +9,7 @@
 #include "Collections.h"
 #include "Algorithms.h"
 #include "Hash.h"
+#include "Pointers.h"
 #include "Profiler.h"
 
 namespace Essence {

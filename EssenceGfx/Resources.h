@@ -89,6 +89,8 @@ resource_transition_t*	GetResourceTransitionInfo(resource_handle);
 resource_rtv_t			GetRTV(resource_slice_t resource);
 resource_rtv_t			GetDSV(resource_slice_t resource, DsvAccessEnum access = DSV_WRITE_ALL);
 
+void					Delete(resource_handle);
+void					DeregisterSwapChainBuffers();
 void					RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index);
 resource_handle			GetCurrentBackbuffer();
 

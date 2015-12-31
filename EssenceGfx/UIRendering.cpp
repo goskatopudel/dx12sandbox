@@ -110,7 +110,7 @@ void RenderImDrawLists(ImDrawData *draw_data) {
 
 			SetShaderState(cmdList, SHADER_(Ui, VShader, VS_5_0), SHADER_(Ui, PShader, PS_5_0), UiVertex);
 
-			SetViewport(cmdList, 1200, 768);
+			SetViewport(cmdList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 			SetTopology(cmdList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			SetRenderTarget(cmdList, 0, Slice(GetCurrentBackbuffer()));
 

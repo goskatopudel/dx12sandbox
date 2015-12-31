@@ -243,7 +243,7 @@ void ParallelRenderSceneRange(const void* InArgs, Job*) {
 			SetShaderState(drawCmds, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
 			SetRenderTarget(drawCmds, 0, Slice(RT_A));
 			SetDepthStencil(drawCmds, Slice(DepthBuffer));
-			SetViewport(drawCmds, 1200, 768);
+			SetViewport(drawCmds, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 			SetTopology(drawCmds, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 			SetConstant(drawCmds, TEXT_("World"), worldMatrix);
@@ -359,7 +359,7 @@ void RenderScene(Scene &Scene, GPUCommandList* drawCmds, ICameraControler* pCame
 			SetShaderState(drawCmds, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
 			SetRenderTarget(drawCmds, 0, Slice(RT_A));
 			SetDepthStencil(drawCmds, Slice(DepthBuffer));
-			SetViewport(drawCmds, 1200, 768);
+			SetViewport(drawCmds, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 			SetTopology(drawCmds, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 			SetConstant(drawCmds, TEXT_("World"), worldMatrix);

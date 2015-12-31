@@ -14,7 +14,8 @@ void(*GApplicationKeyDownFunction)		(SDL_Keycode) = [](SDL_Keycode) {};
 void(*GApplicationMouseWheelFunction)	(int) = [](int) {};
 void(*GApplicationFileDropFunction)		(const char*) = [](const char*) {};
 void(*GApplicationTextInputFunction)	(const wchar_t*) = [](const wchar_t*) {};
-void(*GApplicationWindowResizeFunction)	() = []() {};
+void(*GApplicationWindowResizeFunction)	() = []() {
+};
 
 const char* GetRelativeFilePath(const char* file) {
 	return file + GWorkingDirLength + 1;

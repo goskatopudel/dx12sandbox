@@ -66,7 +66,6 @@ DescriptorAllocator						RTVDescHeap;
 DescriptorAllocator						DSVDescHeap;
 DescriptorAllocator						ViewDescHeap;
 
-Hashmap<resource_handle, i32>			Resources;
 Freelist<resource_t, resource_handle>	ResourcesTable;
 Array<resource_fast_t>					ResourcesFastTable;
 Array<resource_transition_t>			ResourcesTransitionTable;
@@ -99,8 +98,7 @@ void	InitResources() {
 }
 
 void	ShutdownResources() {
-	for (auto kv : Resources) {
-		auto& Record = ResourcesTable[kv.key];
+	for (auto& Record : ResourcesTable) {
 		Record.resource->Release();
 		Record = {};
 	}
@@ -109,7 +107,6 @@ void	ShutdownResources() {
 	FreeMemory(ResourcesTransitionTable);
 	FreeMemory(ResourcesFastTable);
 	FreeMemory(ResourcesViews);
-	FreeMemory(Resources);
 
 	call_destructor(ViewDescHeap);
 	call_destructor(RTVDescHeap);
@@ -134,16 +131,28 @@ resource_handle CreateResourceEntry() {
 	ResourcesTransitionTable[handle.index] = {};
 	ResourcesViews[handle.index] = {};
 
-	Set(Resources, handle, 0);
-
 	return handle;
 }
 
-void DeleteResourceEntry(resource_handle resource) {
-	ResourcesTable[resource].resource->Release();
-	Verify(Remove(Resources, resource));
-	Delete(ResourcesTable, resource);
+void DeleteResourceEntry(resource_handle handle) {
+	ResourcesTable[handle].resource->Release();
+
+	DSVDescHeap.Free(ResourcesViews[handle.index].dsv_locations);
+	ViewDescHeap.Free(ResourcesViews[handle.index].srv_locations);
+	RTVDescHeap.Free(ResourcesViews[handle.index].rtv_location);
+
+	ResourcesTable[handle] = {};
+	ResourcesFastTable[handle.index] = {};
+	ResourcesTransitionTable[handle.index] = {};
+	ResourcesViews[handle.index] = {};
+
+	Delete(ResourcesTable, handle);
 	// todo: drop state tracking
+}
+
+void Delete(resource_handle resource) {
+
+	DeleteResourceEntry(resource);
 }
 
 CPU_DESC_HANDLE ToCPUHandle(descriptor_allocation_t allocation, i32 offset = 0) {
@@ -346,10 +355,21 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 	return handle;
 }
 
-resource_handle		GSwapChain[8];
+const u32			MAX_SWAP_BUFFERS = 8;
+resource_handle		GSwapChain[MAX_SWAP_BUFFERS];
+
+void	DeregisterSwapChainBuffers() {
+	for (auto i : MakeRange(MAX_SWAP_BUFFERS)) {
+		if (IsValid(GSwapChain[i])) {
+			Delete(GSwapChain[i]);
+		}
+	}
+}
 
 void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 	auto debugName = "swapchain";
+
+	Check(index < MAX_SWAP_BUFFERS);
 
 	SetDebugName(resource, debugName);
 
@@ -358,6 +378,7 @@ void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 	auto &Record = ResourcesTable[handle];
 	Record = {};
 	Record.resource = resource;
+	resource->AddRef();
 	Record.debug_name = TEXT_(debugName);
 	Record.desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 

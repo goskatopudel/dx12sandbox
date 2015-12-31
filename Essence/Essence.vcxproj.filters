@@ -93,6 +93,9 @@
     <ClInclude Include="Profiler.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Pointers.h">
+      <Filter>Core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MurmurHash.cpp">

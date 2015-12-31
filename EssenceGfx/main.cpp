@@ -136,8 +136,23 @@ void ShowMemoryInfo() {
 	ImGui::End();
 }
 
+void CreateScreenResources() {
+	if (IsValid(RT_A)) {
+		Delete(RT_A);
+		Delete(RT_B);
+		Delete(DepthBuffer);
+	}
+
+	auto x = GDisplaySettings.resolution.x;
+	auto y = GDisplaySettings.resolution.y;
+
+	RT_A = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "rt0", float4(0.5f, 0.5f, 0.5f, 1));
+	RT_B = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "rt1", float4(0.5f, 0.5f, 0.5f, 1));
+	DepthBuffer = CreateTexture(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth");
+}
+
 void Init() {
-	InitDevice(GDisplaySettings.hwnd, false, false);
+	InitDevice(GDisplaySettings.hwnd, false, true);
 	InitRenderingEngines();
 	InitResources();
 
@@ -146,9 +161,7 @@ void Init() {
 
 	CreateSwapChain(GetD12Queue(GDrawQueue), 3);
 
-	RT_A = CreateTexture(1200, 768, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "rt0", float4(0.5f, 0.5f, 0.5f, 1));
-	RT_B = CreateTexture(1200, 768, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "rt1", float4(0.5f, 0.5f, 0.5f, 1));
-	DepthBuffer = CreateTexture(1200, 768, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth");
+	CreateScreenResources();
 
 	QuadVertex		= GetVertexFactory({ VertexInput::POSITION_4_32F, VertexInput::TEXCOORD_32F});
 	ColoredVertex	= GetVertexFactory({ VertexInput::POSITION_3_32F, VertexInput::COLOR_RGBA_8U });
@@ -339,7 +352,7 @@ void Tick() {
 		ClearDepthStencil(drawList, Slice(DepthBuffer));
 		SetShaderState(drawList, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, ColorPS, PS_5_1), {});
 		SetRenderTarget(drawList, 0, Slice(RT_A));
-		SetViewport(drawList, 1200, 768);
+		SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 		SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		static float x = 0;
 		x += 1 / 60.f;
@@ -449,6 +462,12 @@ int main(int argc, char * argv[]) {
 	GApplicationInitializeFunction = Init;
 	GApplicationTickFunction = Tick;
 	GApplicationShutdownFunction = Shutdown;
+
+	GApplicationWindowResizeFunction = []() {
+		WaitForCompletion();
+		ResizeSwapChain(GDisplaySettings.resolution.x, GDisplaySettings.resolution.y);
+		CreateScreenResources();
+	};
 
 	return ApplicationWinMain();
 }

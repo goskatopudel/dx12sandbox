@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 14
-VisualStudioVersion = 14.0.23107.0
+VisualStudioVersion = 14.0.24720.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Essence", "Essence\Essence.vcxproj", "{0FA0B57F-376C-4272-A4F1-EAAB676E88AA}"
 EndProject
@@ -13,6 +13,8 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EssenceTest", "EssenceTest\EssenceTest.vcxproj", "{14E64A53-B140-4A30-A1C8-ED3F873B6AC4}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ModelImporterDLL", "ModelImporterDLL\ModelImporterDLL.vcxproj", "{F92A3F1D-1733-4180-8DD0-353CD8AF7A6B}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AnimationsTest", "AnimationsTest\AnimationsTest.vcxproj", "{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -73,6 +75,18 @@ Global
 		{F92A3F1D-1733-4180-8DD0-353CD8AF7A6B}.Release|x64.Build.0 = Release|x64
 		{F92A3F1D-1733-4180-8DD0-353CD8AF7A6B}.Release|x86.ActiveCfg = Release|Win32
 		{F92A3F1D-1733-4180-8DD0-353CD8AF7A6B}.Release|x86.Build.0 = Release|Win32
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Debug|x64.ActiveCfg = Debug|x64
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Debug|x64.Build.0 = Debug|x64
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Debug|x86.ActiveCfg = Debug|Win32
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Debug|x86.Build.0 = Debug|Win32
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Profile|x64.ActiveCfg = Release|x64
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Profile|x64.Build.0 = Release|x64
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Profile|x86.ActiveCfg = Release|Win32
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Profile|x86.Build.0 = Release|Win32
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Release|x64.ActiveCfg = Release|x64
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Release|x64.Build.0 = Release|x64
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Release|x86.ActiveCfg = Release|Win32
+		{33FBD50C-6FB7-4B79-9D0E-067F6CA01680}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

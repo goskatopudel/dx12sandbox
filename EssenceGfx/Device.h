@@ -7,44 +7,6 @@
 
 namespace Essence {
 
-template<typename T>
-struct OwningComPtr {
-	T*		Ptr;
-
-	T**		GetInitPtr() {
-		return &Ptr;
-	}
-
-	T*		operator*() const {
-		return Ptr;
-	}
-
-	T*		operator->() const {
-		return Ptr;
-	}
-
-	OwningComPtr() : Ptr(nullptr) {}
-	OwningComPtr(OwningComPtr<T> const& other) = delete;
-
-	OwningComPtr(OwningComPtr<T> && other) {
-		*this = other;
-	}
-
-	OwningComPtr<T>& operator = (OwningComPtr<T> && other) {
-		Ptr = other.Ptr;
-		other.Ptr = nullptr;
-
-		return *this;
-	}
-
-	~OwningComPtr() {
-		if (Ptr) {
-			Ptr->Release();
-			Ptr = nullptr;
-		}
-	}
-};
-
 const u32						MaxGpuBufferedFrames = 4;
 const D3D_FEATURE_LEVEL			MinFeatureLevel = D3D_FEATURE_LEVEL_11_0;
 
@@ -62,7 +24,9 @@ void							InitDevice(HWND	hwnd, bool useWarpAdapter, bool enableDebugLayer);
 void							ShutdownDevice();
 
 void							CreateSwapChain(ID3D12CommandQueue* queue, u32 buffersNum);
+void							ResizeSwapChain(u32 width, u32 height);
 void							Present(u32 vsync);
+
 DXGI_QUERY_VIDEO_MEMORY_INFO	GetLocalMemoryInfo();
 DXGI_QUERY_VIDEO_MEMORY_INFO	GetNonLocalMemoryInfo();
 void							SetStablePower(bool enable);
