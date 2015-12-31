@@ -110,4 +110,10 @@ enum BufferFlags {
 resource_handle			CreateBuffer(ResourceHeapType heapType, u64 size, u64 stride, BufferFlags flags, const char* debugName);
 void					CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size);
 
+inline void* HandleToImGuiTexID(resource_handle handle) {
+	u64 val = 0;
+	*reinterpret_cast<resource_handle*>(&val) = handle;
+	return (void*)val;
+}
+
 }

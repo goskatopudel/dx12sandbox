@@ -38,7 +38,7 @@ void FreeModelsMemory() {
 	FreeMemory(Models);
 }
 
-extern GPUQueue* GCopyQueue;
+extern GPUQueue* GGPUCopyQueue;
 
 u32 packBoneIndices(uint4 const &v) {
 	return ((v.x & 255) << 0) | ((v.y & 255) << 8) | ((v.z & 255) << 16) | ((v.w & 255) << 24);
@@ -66,7 +66,7 @@ void LoadModel(ResourceNameId name) {
 		PushBack(Vertices, vertex);
 	}
 
-	auto copyCommands = GetCommandList(GCopyQueue, NAME_("Copy"));
+	auto copyCommands = GetCommandList(GGPUCopyQueue, NAME_("Copy"));
 
 	model_t model;
 	model.vertex_buffer = CreateBuffer(DEFAULT_MEMORY, Size(Vertices) * sizeof(mesh_vertex_t), sizeof(mesh_vertex_t), ALLOW_VERTEX_BUFFER, Format("vertex buffer of %s", (const char*)GetString(name)));

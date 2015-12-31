@@ -790,7 +790,8 @@ GPUQueue::GPUQueue(GPUQueueTypeEnum type, u32 adapterIndex) :
 	Type(type),
 	AdapterIndex(adapterIndex),
 	FenceValue(1),
-	LastSignaledValue(0)
+	LastSignaledValue(0),
+	LastSignaledFence()
 {
 	D3D12_COMMAND_QUEUE_DESC queueDesc;
 	ZeroMemory(&queueDesc, sizeof(queueDesc));

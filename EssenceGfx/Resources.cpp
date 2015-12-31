@@ -6,6 +6,8 @@
 #include "Descriptors.h"
 
 #include "d3dx12.h"
+#include <SDL.h>
+#include <SDL_syswm.h>
 
 namespace Essence {
 
