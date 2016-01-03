@@ -47,6 +47,16 @@ void			SetAnimation(Scene& Scene, scene_entity_h entity, u32 index, float startT
 void			MirrorAnimation(Scene& Scene, scene_entity_h dstEntity, scene_entity_h srcEntity);
 void			UpdateAnimations(Scene& Scene, float dt);
 void			UpdateScene(Scene &Scene, float dt);
-void			RenderScene(Scene &Scene, GPUCommandList* drawCmds, ICameraControler* pCamera);
-GPUFenceHandle	ParallelRenderScene(GPUQueue*, Scene &Scene, GPUCommandList* drawCmds, ICameraControler* pCamera);
+
+struct render_scene_setup {
+	float				width;
+	float				height;
+	float				x;
+	float				y;
+	resource_handle		target;
+	ICameraControler*	pcamera;
+};
+
+void			RenderScene(Scene &Scene, GPUCommandList* drawCmds, render_scene_setup const* Setup);
+void			ParallelRenderScene(GPUQueue*, Scene &Scene, GPUCommandList* drawCmds, render_scene_setup const* Setup);
 }

@@ -6,7 +6,7 @@ struct ImDrawData;
 
 namespace Essence {
 
-GPUCommandList* RenderUserInterface(GPUQueue* queue);
+void RenderUserInterface(GPUCommandList* commandList);
 void RenderImDrawLists(ImDrawData *draw_data);
 
 }

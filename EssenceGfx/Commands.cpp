@@ -13,6 +13,11 @@
 
 namespace Essence {
 
+enum PipelineTypeEnum {
+	PIPELINE_UNKNOWN,
+	PIPELINE_GRAPHICS,
+	PIPELINE_COMPUTE
+};
 
 bool IsExclusiveState(D3D12_RESOURCE_STATES state) {
 	switch (state) {
@@ -614,6 +619,7 @@ enum RootParameterEnum {
 
 struct root_table_parameter_t {
 	u32 length;
+	u32 uav_range_offset;
 	u32 cbv_range_offset;
 	u32 root_index;
 };
@@ -640,7 +646,7 @@ struct shader_constantbuffer_t {
 	u64 param_hash;
 };
 
-class GraphicsPipelineStateBindings;
+class PipelineStateBindings;
 
 struct constantbuffer_cpudata_t {
 	void*	write_ptr;
@@ -675,15 +681,21 @@ public:
 		D3D_PRIMITIVE_TOPOLOGY					Topology;
 		DXGI_FORMAT								RTVFormats[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
 		CPU_DESC_HANDLE							RTVDescriptors[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
+		resource_slice_t						RTResources[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
 		DXGI_FORMAT								DSVFormat;
 		CPU_DESC_HANDLE							DSVDescriptor;
+		resource_slice_t						DSResource;
 		u32										NumRenderTargets;
 		vertex_factory_handle					VertexFactory;
 		D3D12_VERTEX_BUFFER_VIEW				VertexStreams[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
 		u32										VertexStreamsNum;
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC		PipelineDesc;
 	} Graphics;
-	GraphicsPipelineStateBindings*	Bindings;
+	struct {
+		D3D12_COMPUTE_PIPELINE_STATE_DESC		PipelineDesc;
+	} Compute;
+	PipelineStateBindings*	Bindings;
+	PipelineTypeEnum		Type;
 
 	void ResetState() {
 		Graphics = {};
@@ -702,6 +714,10 @@ public:
 		Graphics.ScissorRect.right = 32768;
 		Graphics.ScissorRect.bottom = 32768;
 
+		Compute = {};
+
+		ZeroMemory(&Compute.PipelineDesc, sizeof(Compute.PipelineDesc));
+
 		Clear(Root.DstDescRanges);
 		Clear(Root.DstDescSizes);
 		Clear(Root.SrcDescRanges);
@@ -710,10 +726,12 @@ public:
 		Clear(Root.Params);
 
 		Bindings = nullptr;
+
+		Type = {};
 	}
 
 	GPUCommandList(ResourceNameId usage, GPUCommandAllocator* allocator, GPUQueue *queue, GPUCommandListPool* pool)
-		: Usage(usage), CommandAllocator(allocator), Queue(queue), Pool(pool), State(), ResourcesStateTracker(this)
+		: Usage(usage), CommandAllocator(allocator), Queue(queue), Pool(pool), State(), ResourcesStateTracker(this), Type()
 	{
 		VerifyHr(GD12Device->CreateCommandList(0, GetD12QueueType(queue->Type), *allocator->D12CommandAllocator, nullptr, IID_PPV_ARGS(D12CommandList.GetInitPtr())));
 	}
@@ -1081,6 +1099,15 @@ void ClearRenderTarget(GPUCommandList* list, resource_slice_t resource, float4 c
 	list->D12CommandList->ClearRenderTargetView(GetRTV(resource).cpu_descriptor, c, 0, nullptr);
 }
 
+void ClearUnorderedAccess(GPUCommandList* list, resource_slice_t resource) {
+	list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	list->ResourcesStateTracker.FireBarriers();
+	u32 values[4] = { 0, 0, 0, 0 };
+	auto viewAlloc = GpuDescriptorsAllocator.AllocateTemporary(1);
+	GD12Device->CopyDescriptorsSimple(1, GetCPUHandle(viewAlloc), GetUAV(resource), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	list->D12CommandList->ClearUnorderedAccessViewUint(GetGPUHandle(viewAlloc), GetUAV(resource), GetResourceFast(resource.handle)->resource, values, 0, nullptr);
+}
+
 void ClearDepthStencil(GPUCommandList* list, resource_slice_t resource, ClearDepthFlagEnum flags, float depth, u8 stencil) {
 	list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 	list->ResourcesStateTracker.FireBarriers();
@@ -1238,6 +1265,8 @@ bool GetConstantBuffersAndVariables(
 				auto variable = cbReflection->GetVariableByIndex(i);
 				D3D12_SHADER_VARIABLE_DESC variableDesc;
 				VerifyHr(variable->GetDesc(&variableDesc));
+				// to ignore used/unused marking for particular shader
+				variableDesc.uFlags &= ~0x2;
 				cbInfo.content_hash = Hash::MurmurHash2_64(variableDesc.Name, (u32)strlen(variableDesc.Name), cbInfo.content_hash);
 				variableDesc.Name = nullptr;
 				cbInfo.content_hash = Hash::MurmurHash2_64(&variableDesc, sizeof(variableDesc), cbInfo.content_hash);
@@ -1248,7 +1277,7 @@ bool GetConstantBuffersAndVariables(
 				cbDict[cbDictKey] = cbInfo;
 			}
 			else if (cbDict[cbDictKey].content_hash != cbInfo.content_hash) {
-				Format("shader state has conflicting constant buffers");
+				ConsolePrint(Format("shader state has conflicting constant buffers"));
 				return false;
 			}
 
@@ -1268,6 +1297,8 @@ bool GetConstantBuffersAndVariables(
 				variableDesc.Name = nullptr;
 				auto defaulValue = variableDesc.DefaultValue;
 				variableDesc.DefaultValue = nullptr;
+				// to ignore used/unused marking for particular shader
+				variableDesc.uFlags &= ~0x2;
 				varInfo.content_hash = Hash::MurmurHash2_64(&variableDesc, sizeof(variableDesc), 0);
 
 				// add to dict, check if no collision
@@ -1275,7 +1306,7 @@ bool GetConstantBuffersAndVariables(
 					varsDict[varDictKey] = varInfo;
 				}
 				else if (varsDict[varDictKey].content_hash != varInfo.content_hash) {
-					Format("shader state has conflicting varriable");
+					ConsolePrint(Format("shader state has conflicting varriable"));
 					return false;
 				}
 			}
@@ -1300,6 +1331,10 @@ bool GetInputBindingSlots(
 	for (auto i = 0u; i < resourcesNum;++i) {
 		D3D12_SHADER_INPUT_BIND_DESC bindDesc;
 		VerifyHr(shaderReflection->GetResourceBindingDesc(i, &bindDesc));
+		// because of trash memory from shader reflection :(
+		ZeroMemory(
+			(u8*)&bindDesc + offsetof(D3D12_SHADER_INPUT_BIND_DESC, uID) + sizeof(bindDesc.uID),
+			sizeof(bindDesc) - offsetof(D3D12_SHADER_INPUT_BIND_DESC, uID) - sizeof(bindDesc.uID));
 
 		shader_input_desc_t bindInfo = {};
 		bindInfo.reg = bindDesc.BindPoint;
@@ -1329,6 +1364,12 @@ bool GetInputBindingSlots(
 			{
 				bindInfo.frequency = 0;
 				bindInfo.type = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+			}
+			break;
+		case D3D_SIT_UAV_RWTYPED:
+			{
+				bindInfo.frequency = 0;
+				bindInfo.type = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 			}
 			break;
 		}
@@ -1368,6 +1409,10 @@ struct graphics_pipeline_root_key {
 	shader_handle PS;
 };
 
+struct compute_pipeline_root_key {
+	shader_handle CS;
+};
+
 struct root_range_offset_t {
 	u32 index;
 	u32 num;
@@ -1390,6 +1435,7 @@ void GetRootParamsForBindings(
 	auto currentTableSlot = 0;
 	u32 index = start;
 	u32 cbvsOffset = 0;
+	u32 uavsOffset = 0;
 
 	//right now everything ends in a table
 	D3D12_ROOT_PARAMETER currentTable;
@@ -1415,6 +1461,8 @@ void GetRootParamsForBindings(
 		// update table info if necessary
 		currentTable.ShaderVisibility = currentTable.ShaderVisibility == bindInputs[key].visibility ?
 			currentTable.ShaderVisibility : D3D12_SHADER_VISIBILITY_ALL;
+		if (range.RangeType != D3D12_DESCRIPTOR_RANGE_TYPE_UAV && range.RangeType != D3D12_DESCRIPTOR_RANGE_TYPE_CBV)
+			++uavsOffset;
 		if (range.RangeType != D3D12_DESCRIPTOR_RANGE_TYPE_CBV)
 			++cbvsOffset;
 
@@ -1438,6 +1486,8 @@ void GetRootParamsForBindings(
 
 			currentTable.ShaderVisibility = currentTable.ShaderVisibility == bindInputs[key].visibility ?
 				currentTable.ShaderVisibility : D3D12_SHADER_VISIBILITY_ALL;
+			if (range.RangeType != D3D12_DESCRIPTOR_RANGE_TYPE_UAV && range.RangeType != D3D12_DESCRIPTOR_RANGE_TYPE_CBV)
+				++uavsOffset;
 			if (range.RangeType != D3D12_DESCRIPTOR_RANGE_TYPE_CBV)
 				++cbvsOffset;
 			++index;
@@ -1456,6 +1506,10 @@ void GetRootParamsForBindings(
 	root_parameter_t rootParamInfo;
 	rootParamInfo.table.length = currentTableSlot;
 	rootParamInfo.table.root_index = (u32)Size(rootParamsArray);
+	Check(uavsOffset <= (u32)currentTableSlot);
+	Check(cbvsOffset <= (u32)currentTableSlot);
+	Check(uavsOffset <= cbvsOffset);
+	rootParamInfo.table.uav_range_offset = uavsOffset;
 	rootParamInfo.table.cbv_range_offset = cbvsOffset;
 	RootParams[tableHash] = rootParamInfo;
 
@@ -1488,62 +1542,74 @@ Array<K> GetKeysScratch(Hashmap<K, V>  & Hm) {
 	return std::move(A);
 }
 
-class GraphicsPipelineStateBindings {
+void DebugPrintRoot(D3D12_ROOT_SIGNATURE_DESC const& desc) {
+	ConsolePrint("Root params:\n");
+	for (auto i : MakeRange(desc.NumParameters)) {
+		desc.pParameters[i].DescriptorTable;
+		desc.pParameters[i].ShaderVisibility;
+
+		Check(desc.pParameters[i].ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE);
+
+		auto visibilityStr = [](D3D12_SHADER_VISIBILITY a) {
+			switch (a) {
+			case D3D12_SHADER_VISIBILITY_ALL:
+				return "ALL";
+			case D3D12_SHADER_VISIBILITY_VERTEX:
+				return "PIX";
+			case D3D12_SHADER_VISIBILITY_PIXEL:
+				return "VERT";
+			};
+			return "?";
+		};
+
+		auto rangeStr = [](D3D12_DESCRIPTOR_RANGE_TYPE a) {
+			switch (a) {
+			case D3D12_DESCRIPTOR_RANGE_TYPE_SRV:
+				return "t";
+			case D3D12_DESCRIPTOR_RANGE_TYPE_UAV:
+				return "u";
+			case D3D12_DESCRIPTOR_RANGE_TYPE_CBV:
+				return "b";
+			case D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER:
+				return "s";
+			};
+			return "?";
+		};
+
+		ConsolePrint(Format("[%d]: table, visibility: %s\n", i, visibilityStr(desc.pParameters[i].ShaderVisibility)));
+
+		for (auto r : MakeRange(desc.pParameters[i].DescriptorTable.NumDescriptorRanges)) {
+			auto range = desc.pParameters[i].DescriptorTable.pDescriptorRanges[r];
+			ConsolePrint(Format("  [%d]: %s%d,%d+%d offset %d\n", 
+				r,
+				rangeStr(range.RangeType),
+				range.BaseShaderRegister,
+				range.RegisterSpace,
+				range.NumDescriptors,
+				range.OffsetInDescriptorsFromTableStart));
+		}
+	}
+}
+
+class PipelineStateBindings {
 public:
-	shader_handle	VS;
-	shader_handle	PS;
 	u32				CompilationErrors : 1;
-	u32				NoPixelShader : 1;
 	Hashmap<TextId, shader_binding_t>				Texture2DParams;
+	Hashmap<TextId, shader_binding_t>				RWTexture2DParams;
 	Hashmap<TextId, shader_constantvariable_t>		ConstantVarParams;
 	Hashmap<u64, shader_constantbuffer_t>			ConstantBuffers;
 	Hashmap<u64, root_parameter_t>					RootParams;
 
 	ID3D12RootSignature* RootSignature;
 
-	GraphicsPipelineStateBindings() :
-		VS({}),
-		PS({}),
-		CompilationErrors(0),
-		NoPixelShader(1)
+protected:
+	void PrepareInternal(
+		Hashmap<TextId, shader_constantvariable_desc_t>& constantVariables,
+		Hashmap<TextId, shader_input_desc_t>& bindInputs,
+		Hashmap<TextId, shader_constantbuffer_desc_t>& constantBuffers) 
 	{
-	}
-
-	void Prepare() {
-		CompilationErrors = 0;
-
-		Check(IsValid(VS));
-
-		auto& vsBytecode = GetShaderBytecode(VS);
-		auto& psBytecode = GetShaderBytecode(PS);
-		NoPixelShader = !IsValid(PS);
-		CompilationErrors = (vsBytecode.bytesize == 0) || (!NoPixelShader && psBytecode.bytesize == 0);
-		if (CompilationErrors) {
-			return;
-		}
-
-		Hashmap<TextId, shader_constantvariable_desc_t>	constantVariables(GetThreadScratchAllocator());
-		Hashmap<TextId, shader_input_desc_t>			bindInputs(GetThreadScratchAllocator());
-		Hashmap<TextId, shader_constantbuffer_desc_t>	constantBuffers(GetThreadScratchAllocator());
-
-		ID3D12ShaderReflection* vsReflection;
-		VerifyHr(D3DReflect(vsBytecode.bytecode, vsBytecode.bytesize, IID_PPV_ARGS(&vsReflection)));
-		ID3D12ShaderReflection* psReflection = nullptr;
-		if (!NoPixelShader) {
-			VerifyHr(D3DReflect(psBytecode.bytecode, psBytecode.bytesize, IID_PPV_ARGS(&psReflection)));
-		}
-
-		Verify(GetConstantBuffersAndVariables(vsReflection, constantBuffers, constantVariables));
-		Verify(GetInputBindingSlots(vsReflection, bindInputs, D3D12_SHADER_VISIBILITY_VERTEX));
-
-		if (psReflection) {
-			Verify(GetConstantBuffersAndVariables(psReflection, constantBuffers, constantVariables));
-			Verify(GetInputBindingSlots(psReflection, bindInputs, D3D12_SHADER_VISIBILITY_PIXEL));
-		}
-
-		auto bindArray = GetValuesScratch(bindInputs);
 		auto bindKeys = GetKeysScratch(bindInputs);
-		quicksort(bindArray.DataPtr, 0, bindArray.Size, [](shader_input_desc_t a, shader_input_desc_t b) -> bool { return a < b; });
+		quicksort(bindKeys.DataPtr, 0, bindKeys.Size, [&](TextId a, TextId b) -> bool { return bindInputs[a] < bindInputs[b]; });
 
 		Array<D3D12_DESCRIPTOR_RANGE> rootRangesArray(GetThreadScratchAllocator());
 		Array<D3D12_ROOT_PARAMETER> rootParamsArray(GetThreadScratchAllocator());
@@ -1552,14 +1618,14 @@ public:
 
 		u32 startBindIndex = 0;
 		u32 bindIndex = 0;
-		while (bindIndex < Size(bindArray))
+		while (bindIndex < Size(bindKeys))
 		{
-			auto tableFreq = bindArray[bindIndex].frequency;
-			bool isSamplerTable = bindArray[bindIndex].type == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+			auto tableFreq = bindInputs[bindKeys[bindIndex]].frequency;
+			bool isSamplerTable = bindInputs[bindKeys[bindIndex]].type == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
 
-			while (bindIndex < Size(bindArray)
-				&& bindArray[bindIndex].frequency == tableFreq
-				&& isSamplerTable == (bindArray[bindIndex].type == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER)) {
+			while (bindIndex < Size(bindKeys)
+				&& bindInputs[bindKeys[bindIndex]].frequency == tableFreq
+				&& isSamplerTable == (bindInputs[bindKeys[bindIndex]].type == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER)) {
 
 				bindIndex++;
 			}
@@ -1575,7 +1641,7 @@ public:
 		Hashmap<TextId, u64> constantBufferNameToHash(GetThreadScratchAllocator());
 
 		// values changed
-		bindArray = GetValuesScratch(bindInputs);
+		auto bindArray = GetValuesScratch(bindInputs);
 		for (auto i = 0u; i < Size(bindArray); ++i) {
 			if (bindArray[i].type == D3D12_DESCRIPTOR_RANGE_TYPE_SRV) {
 				shader_binding_t bindingInfo;
@@ -1591,6 +1657,12 @@ public:
 
 				ConstantBuffers[constantBuffers[bindArray[i].name].content_hash] = cbBindInfo;
 				constantBufferNameToHash[bindArray[i].name] = constantBuffers[bindArray[i].name].content_hash;
+			}
+			else if (bindArray[i].type == D3D12_DESCRIPTOR_RANGE_TYPE_UAV) {
+				shader_binding_t bindingInfo;
+				bindingInfo.root_parameter_hash = bindArray[i].paramHashId;
+				bindingInfo.table_slot = bindArray[i].paramTableSlot;
+				RWTexture2DParams[bindArray[i].name] = bindingInfo;
 			}
 		}
 
@@ -1619,18 +1691,116 @@ public:
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS;
 
 		RootSignature = GetRootSignature(rootDesc, &rootRangesArray, &rootParamsArray).ptr;
-
-		ComRelease(vsReflection);
-		ComRelease(psReflection);
+		DebugPrintRoot(rootDesc);
 
 		Trim(Texture2DParams);
+		Trim(RWTexture2DParams);
 		Trim(ConstantVarParams);
 		Trim(ConstantBuffers);
 		Trim(RootParams);
 	}
 };
 
+class GraphicsPipelineStateBindings : public PipelineStateBindings {
+public:
+	shader_handle	VS;
+	shader_handle	PS;
+	u32				CompilationErrors : 1;
+	u32				NoPixelShader : 1;
+
+	GraphicsPipelineStateBindings() :
+		VS({}),
+		PS({}),
+		CompilationErrors(0),
+		NoPixelShader(1)
+	{
+	}
+
+	void Prepare() {
+		CompilationErrors = 0;
+
+		Check(IsValid(VS));
+
+		auto vsBytecode = GetShaderBytecode(VS);
+		NoPixelShader = !IsValid(PS);
+		auto psBytecode = NoPixelShader ? shader_bytecode_t() : GetShaderBytecode(PS);
+		CompilationErrors = (vsBytecode.bytesize == 0) || (!NoPixelShader && psBytecode.bytesize == 0);
+		if (CompilationErrors) {
+			return;
+		}
+
+		Hashmap<TextId, shader_constantvariable_desc_t>	constantVariables(GetThreadScratchAllocator());
+		Hashmap<TextId, shader_input_desc_t>			bindInputs(GetThreadScratchAllocator());
+		Hashmap<TextId, shader_constantbuffer_desc_t>	constantBuffers(GetThreadScratchAllocator());
+
+		ID3D12ShaderReflection* vsReflection;
+		VerifyHr(D3DReflect(vsBytecode.bytecode, vsBytecode.bytesize, IID_PPV_ARGS(&vsReflection)));
+		ID3D12ShaderReflection* psReflection = nullptr;
+		if (!NoPixelShader) {
+			VerifyHr(D3DReflect(psBytecode.bytecode, psBytecode.bytesize, IID_PPV_ARGS(&psReflection)));
+		}
+
+		Verify(GetConstantBuffersAndVariables(vsReflection, constantBuffers, constantVariables));
+		Verify(GetInputBindingSlots(vsReflection, bindInputs, D3D12_SHADER_VISIBILITY_VERTEX));
+
+		if (psReflection) {
+			Verify(GetConstantBuffersAndVariables(psReflection, constantBuffers, constantVariables));
+			Verify(GetInputBindingSlots(psReflection, bindInputs, D3D12_SHADER_VISIBILITY_PIXEL));
+		}
+
+		ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(VS)));
+		if (!NoPixelShader) {
+			ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(PS)));
+		}
+
+		PrepareInternal(constantVariables, bindInputs, constantBuffers);
+
+		ComRelease(vsReflection);
+		ComRelease(psReflection);
+	}
+};
+
+class ComputePipelineStateBindings : public PipelineStateBindings {
+public:
+	shader_handle	CS;
+	u32				CompilationErrors : 1;
+
+	ComputePipelineStateBindings() :
+		CS({}),
+		CompilationErrors(0)
+	{
+	}
+
+	void Prepare() {
+		CompilationErrors = 0;
+
+		Check(IsValid(CS));
+
+		auto csBytecode = GetShaderBytecode(CS);
+		CompilationErrors = (csBytecode.bytesize == 0);
+		if (CompilationErrors) {
+			return;
+		}
+
+		Hashmap<TextId, shader_constantvariable_desc_t>	constantVariables(GetThreadScratchAllocator());
+		Hashmap<TextId, shader_input_desc_t>			bindInputs(GetThreadScratchAllocator());
+		Hashmap<TextId, shader_constantbuffer_desc_t>	constantBuffers(GetThreadScratchAllocator());
+
+		ID3D12ShaderReflection* csReflection;
+		VerifyHr(D3DReflect(csBytecode.bytecode, csBytecode.bytesize, IID_PPV_ARGS(&csReflection)));
+		
+		Verify(GetConstantBuffersAndVariables(csReflection, constantBuffers, constantVariables));
+		Verify(GetInputBindingSlots(csReflection, bindInputs, D3D12_SHADER_VISIBILITY_ALL));
+
+		ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(CS)));
+		PrepareInternal(constantVariables, bindInputs, constantBuffers);
+
+		ComRelease(csReflection);
+	}
+};
+
 Hashmap<graphics_pipeline_root_key, GraphicsPipelineStateBindings*> CachedShaderStateBindings;
+Hashmap<compute_pipeline_root_key, ComputePipelineStateBindings*>	CachedComputeShaderStateBindings;
 RWLock																CachedStateBindingsRWL;
 
 GraphicsPipelineStateBindings* GetPipelineStateBindings(shader_handle VS, shader_handle PS) {
@@ -1654,6 +1824,31 @@ GraphicsPipelineStateBindings* GetPipelineStateBindings(shader_handle VS, shader
 
 	val->VS = VS;
 	val->PS = PS;
+	val->Prepare();
+	CachedStateBindingsRWL.UnlockExclusive();
+
+	return val;
+}
+
+ComputePipelineStateBindings* GetComputePipelineStateBindings(shader_handle CS) {
+	compute_pipeline_root_key key;
+	key.CS = CS;
+
+	CachedStateBindingsRWL.LockShared();
+	auto pbinding = Get(CachedComputeShaderStateBindings, key);
+	if (pbinding) {
+		auto binding = *pbinding;
+		CachedStateBindingsRWL.UnlockShared();
+		return binding;
+	}
+
+	CachedStateBindingsRWL.UnlockShared();
+	CachedStateBindingsRWL.LockExclusive();
+	ComputePipelineStateBindings* val;
+	_new(val);
+	Set(CachedComputeShaderStateBindings, key, val);
+
+	val->CS = CS;
 	val->Prepare();
 	CachedStateBindingsRWL.UnlockExclusive();
 
@@ -1686,8 +1881,15 @@ void SetRootParams(GPUCommandList* list) {
 	}
 
 	list->D12CommandList->SetDescriptorHeaps(1, &GpuDescriptorsAllocator.D12DescriptorHeap.Ptr);
-	for (auto kv : list->Root.Params) {
-		list->D12CommandList->SetGraphicsRootDescriptorTable(kv.value.table.root_index, kv.value.binding.table.gpu_handle);
+	if (list->Type == PIPELINE_GRAPHICS) {
+		for (auto kv : list->Root.Params) {
+			list->D12CommandList->SetGraphicsRootDescriptorTable(kv.value.table.root_index, kv.value.binding.table.gpu_handle);
+		}
+	}
+	else if (list->Type == PIPELINE_COMPUTE) {
+		for (auto kv : list->Root.Params) {
+			list->D12CommandList->SetComputeRootDescriptorTable(kv.value.table.root_index, kv.value.binding.table.gpu_handle);
+		}
 	}
 }
 
@@ -1704,6 +1906,15 @@ void ResetRootBindingMappings(GPUCommandList* list) {
 	Clear(list->Root.Params);
 }
 
+void SetComputeShaderState(GPUCommandList* list, shader_handle cs) {
+	auto bindings = GetComputePipelineStateBindings(cs);
+
+	ResetRootBindingMappings(list);
+
+	list->Bindings = bindings;
+	list->Type = PIPELINE_COMPUTE;
+}
+
 void SetShaderState(GPUCommandList* list, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory) {
 	auto bindings = GetPipelineStateBindings(vs, ps);
 
@@ -1712,6 +1923,7 @@ void SetShaderState(GPUCommandList* list, shader_handle vs, shader_handle ps, ve
 	ResetRootBindingMappings(list);
 
 	list->Bindings = bindings;
+	list->Type = PIPELINE_GRAPHICS;
 }
 
 void SetTopology(GPUCommandList* list, D3D_PRIMITIVE_TOPOLOGY topology) {
@@ -1719,12 +1931,19 @@ void SetTopology(GPUCommandList* list, D3D_PRIMITIVE_TOPOLOGY topology) {
 }
 
 struct pipeline_query_t {
-	struct {
-		shader_handle						vs;
-		shader_handle						ps;
-		vertex_factory_handle				vertex_factory;
-		D3D12_GRAPHICS_PIPELINE_STATE_DESC	graphics_desc;
-	} Graphics;
+	union {
+		struct {
+			shader_handle						vs;
+			shader_handle						ps;
+			vertex_factory_handle				vertex_factory;
+			D3D12_GRAPHICS_PIPELINE_STATE_DESC	graphics_desc;
+		} Graphics;
+		struct {
+			shader_handle						cs;
+			D3D12_COMPUTE_PIPELINE_STATE_DESC	compute_desc;
+		} Compute;
+	};
+	PipelineTypeEnum Type;
 };
 
 struct pipeline_t {
@@ -1738,11 +1957,20 @@ Hashmap<u64, pipeline_t>				PipelineDescriptors;
 RWLock									PipelineRWL;
 
 u64 CalculatePipelineQueryHash(pipeline_query_t const* query) {
-	u64 seed = Hash::MurmurHash2_64(&query->Graphics.graphics_desc, sizeof(query->Graphics.graphics_desc), 0);
-	seed = Hash::MurmurHash2_64(&query->Graphics.vs, sizeof(query->Graphics.vs), seed);
-	seed = Hash::MurmurHash2_64(&query->Graphics.ps, sizeof(query->Graphics.ps), seed);
-	seed = Hash::MurmurHash2_64(&query->Graphics.vertex_factory, sizeof(query->Graphics.vertex_factory), seed);
-	return seed;
+	Check(query->Type != PIPELINE_UNKNOWN);
+	if (query->Type == PIPELINE_GRAPHICS) {
+		u64 hash = Hash::MurmurHash2_64(&query->Graphics.graphics_desc, sizeof(query->Graphics.graphics_desc), 0);
+		hash = Hash::MurmurHash2_64(&query->Graphics.vs, sizeof(query->Graphics.vs), hash);
+		hash = Hash::MurmurHash2_64(&query->Graphics.ps, sizeof(query->Graphics.ps), hash);
+		hash = Hash::MurmurHash2_64(&query->Graphics.vertex_factory, sizeof(query->Graphics.vertex_factory), hash);
+		return hash;
+	}
+	if (query->Type == PIPELINE_COMPUTE) {
+		u64 hash = Hash::MurmurHash2_64(&query->Compute.compute_desc, sizeof(query->Compute.compute_desc), 0);
+		hash = Hash::MurmurHash2_64(&query->Compute.cs, sizeof(query->Compute.cs), hash);
+		return hash;
+	}
+	return -1;
 }
 
 ID3D12PipelineState* CreatePipelineState(pipeline_query_t const* query, u64 hash);
@@ -1754,11 +1982,20 @@ void UpdatePipelineStates() {
 }
 
 u64	CalculatePipelinePersistantHash(pipeline_query_t const* query) {
-	auto hash = Hash::Combine_64(GetShaderBytecode(query->Graphics.vs).bytecode_hash, GetShaderBytecode(query->Graphics.ps).bytecode_hash);
-	hash = Hash::MurmurHash2_64(&query->Graphics.graphics_desc, sizeof(query->Graphics.graphics_desc), hash);
-	auto layout = GetInputLayoutDesc(query->Graphics.vertex_factory);
-	hash = Hash::MurmurHash2_64(layout.pInputElementDescs, sizeof(layout.pInputElementDescs[0]) * layout.NumElements, hash);
-	return hash;
+	Check(query->Type != PIPELINE_UNKNOWN);
+	if (query->Type == PIPELINE_GRAPHICS) {
+		auto hash = Hash::Combine_64(GetShaderBytecode(query->Graphics.vs).bytecode_hash, IsValid(query->Graphics.ps) ? GetShaderBytecode(query->Graphics.ps).bytecode_hash : 0);
+		hash = Hash::MurmurHash2_64(&query->Graphics.graphics_desc, sizeof(query->Graphics.graphics_desc), hash);
+		auto layout = GetInputLayoutDesc(query->Graphics.vertex_factory);
+		hash = Hash::MurmurHash2_64(layout.pInputElementDescs, sizeof(layout.pInputElementDescs[0]) * layout.NumElements, hash);
+		return hash;
+	}
+	if (query->Type == PIPELINE_COMPUTE) {
+		u64 hash = GetShaderBytecode(query->Compute.cs).bytecode_hash;
+		hash = Hash::MurmurHash2_64(&query->Compute.compute_desc, sizeof(query->Compute.compute_desc), hash);
+		return hash;
+	}
+	return -1;
 }
 
 ID3D12PipelineState* CreatePipelineState(pipeline_query_t const* query, u64 hash) {
@@ -1767,19 +2004,32 @@ ID3D12PipelineState* CreatePipelineState(pipeline_query_t const* query, u64 hash
 	Check(Contains(PipelineDescriptors, hash));
 
 	if (PipelineDescriptors[hash].persistant_hash != persistantHash) {
-		D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
-		desc = query->Graphics.graphics_desc;
-		desc.pRootSignature = GetPipelineStateBindings(query->Graphics.vs, query->Graphics.ps)->RootSignature;
-		auto VS = GetShaderBytecode(query->Graphics.vs);
-		desc.VS.pShaderBytecode = VS.bytecode;
-		desc.VS.BytecodeLength = VS.bytesize;
-		auto PS = GetShaderBytecode(query->Graphics.ps);
-		desc.PS.pShaderBytecode = PS.bytecode;
-		desc.PS.BytecodeLength = PS.bytesize;
-		desc.InputLayout = GetInputLayoutDesc(query->Graphics.vertex_factory);
-
 		ID3D12PipelineState *pipelineState = nullptr;
-		VerifyHr(GD12Device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipelineState)));
+
+		if (query->Type == PIPELINE_GRAPHICS) {
+			D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
+			desc = query->Graphics.graphics_desc;
+			desc.pRootSignature = GetPipelineStateBindings(query->Graphics.vs, query->Graphics.ps)->RootSignature;
+			auto VS = GetShaderBytecode(query->Graphics.vs);
+			desc.VS.pShaderBytecode = VS.bytecode;
+			desc.VS.BytecodeLength = VS.bytesize;
+			auto PS = IsValid(query->Graphics.ps) ? GetShaderBytecode(query->Graphics.ps) : shader_bytecode_t();
+			desc.PS.pShaderBytecode = PS.bytecode;
+			desc.PS.BytecodeLength = PS.bytesize;
+			desc.InputLayout = GetInputLayoutDesc(query->Graphics.vertex_factory);
+
+			VerifyHr(GD12Device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipelineState)));
+		}
+		else if (query->Type == PIPELINE_COMPUTE) {
+			D3D12_COMPUTE_PIPELINE_STATE_DESC desc;
+			desc = query->Compute.compute_desc;
+			desc.pRootSignature = GetComputePipelineStateBindings(query->Compute.cs)->RootSignature;
+			auto CS = GetShaderBytecode(query->Compute.cs);
+			desc.CS.pShaderBytecode = CS.bytecode;
+			desc.CS.BytecodeLength = CS.bytesize;
+
+			VerifyHr(GD12Device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pipelineState)));
+		}
 
 		if (PipelineByHash[hash] != nullptr) {
 			PipelineByHash[hash]->Release();
@@ -1795,13 +2045,6 @@ ID3D12PipelineState* CreatePipelineState(pipeline_query_t const* query, u64 hash
 }
 
 ID3D12PipelineState* GetPipelineState(pipeline_query_t const* query) {
-	// calculate fast hash
-	// if present get
-	// else
-	// calculte persistant hash
-	// 
-
-
 	u64 hash = CalculatePipelineQueryHash(query);
 
 	PipelineRWL.LockShared();
@@ -1842,15 +2085,40 @@ D3D12_PRIMITIVE_TOPOLOGY_TYPE GetPrimitiveTopologyType(D3D_PRIMITIVE_TOPOLOGY to
 
 void SetRenderTarget(GPUCommandList* list, u32 index, resource_slice_t resource) {
 	auto rtv = GetRTV(resource);
-	list->Graphics.NumRenderTargets = max(list->Graphics.NumRenderTargets, index + 1);
 	list->Graphics.RTVFormats[index] = rtv.format;
 	list->Graphics.RTVDescriptors[index] = rtv.cpu_descriptor;
+	list->Graphics.RTResources[index] = resource;
+
+	if (IsValid(resource.handle)) {
+		list->Graphics.NumRenderTargets = max(list->Graphics.NumRenderTargets, index + 1);
+	}
+	else {
+		list->Graphics.RTVFormats[index] = {};
+		list->Graphics.RTVDescriptors[index] = {};
+		list->Graphics.RTResources[index] = {};
+
+		i32 maxIndex = -1;
+		for (i32 i = 0; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i) {
+			if (list->Graphics.RTVDescriptors[i].ptr) {
+				maxIndex = i;
+			}
+		}
+		list->Graphics.NumRenderTargets = maxIndex + 1;
+	}
 }
 
 void SetDepthStencil(GPUCommandList* list, resource_slice_t resource) {
-	auto dsv = GetDSV(resource);
-	list->Graphics.DSVFormat = dsv.format;
-	list->Graphics.DSVDescriptor = dsv.cpu_descriptor;
+	if (IsValid(resource.handle)) {
+		auto dsv = GetDSV(resource);
+		list->Graphics.DSVFormat = dsv.format;
+		list->Graphics.DSVDescriptor = dsv.cpu_descriptor;
+		list->Graphics.DSResource = resource;
+	}
+	else{
+		list->Graphics.DSVFormat = {};
+		list->Graphics.DSVDescriptor = {};
+		list->Graphics.DSResource = {};
+	}
 }
 
 void SetViewport(GPUCommandList* list, float width, float height, float x, float y, float minDepth, float maxDepth) {
@@ -1877,7 +2145,10 @@ void SetBlendState(GPUCommandList* list, u32 index, D3D12_RENDER_TARGET_BLEND_DE
 void PreDraw(GPUCommandList* list) {
 	auto d12cl = *list->D12CommandList;
 
+	Check(list->Type == PIPELINE_GRAPHICS);
+
 	pipeline_query_t query;
+	query.Type = PIPELINE_GRAPHICS;
 	query.Graphics.graphics_desc = list->Graphics.PipelineDesc;
 	query.Graphics.graphics_desc.DepthStencilState.DepthEnable = list->Graphics.DSVFormat != DXGI_FORMAT_UNKNOWN;
 	query.Graphics.graphics_desc.PrimitiveTopologyType = GetPrimitiveTopologyType(list->Graphics.Topology);
@@ -1885,8 +2156,8 @@ void PreDraw(GPUCommandList* list) {
 	memcpy(&query.Graphics.graphics_desc.RTVFormats, list->Graphics.RTVFormats, sizeof(list->Graphics.RTVFormats));
 	query.Graphics.graphics_desc.DSVFormat = list->Graphics.DSVFormat;
 
-	query.Graphics.vs = list->Bindings->VS;
-	query.Graphics.ps = list->Bindings->PS;
+	query.Graphics.vs = static_cast<GraphicsPipelineStateBindings*>(list->Bindings)->VS;
+	query.Graphics.ps = static_cast<GraphicsPipelineStateBindings*>(list->Bindings)->PS;
 	query.Graphics.vertex_factory = list->Graphics.VertexFactory;
 
 	auto pipelineState = GetPipelineState(&query);
@@ -1900,6 +2171,15 @@ void PreDraw(GPUCommandList* list) {
 	d12cl->IASetPrimitiveTopology(list->Graphics.Topology);
 	d12cl->IASetVertexBuffers(0, list->Graphics.VertexStreamsNum, list->Graphics.VertexStreams);
 	d12cl->OMSetRenderTargets(list->Graphics.NumRenderTargets, list->Graphics.RTVDescriptors, false, list->Graphics.DSVFormat != DXGI_FORMAT_UNKNOWN ? &list->Graphics.DSVDescriptor : nullptr);
+
+	for (auto i : MakeRange(list->Graphics.NumRenderTargets)) {
+		list->ResourcesStateTracker.Transition(list->Graphics.RTResources[i], D3D12_RESOURCE_STATE_RENDER_TARGET);
+	}
+	if (list->Graphics.DSVFormat != DXGI_FORMAT_UNKNOWN) {
+		list->ResourcesStateTracker.Transition(list->Graphics.DSResource, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+	}
+
+	list->ResourcesStateTracker.FireBarriers();
 }
 
 void PostDraw(GPUCommandList* list) {
@@ -1921,6 +2201,36 @@ void DrawIndexed(GPUCommandList* list, u32 indexCount, u32 startIndex, i32 baseV
 	PreDraw(list);
 	list->D12CommandList->DrawIndexedInstanced(indexCount, instances, startIndex, baseVertex, startInstance);
 	PostDraw(list);
+}
+
+void PreDispatch(GPUCommandList* list) {
+	auto d12cl = *list->D12CommandList;
+
+	Check(list->Type == PIPELINE_COMPUTE);
+
+	pipeline_query_t query;
+	query.Type = PIPELINE_COMPUTE;
+	query.Compute.compute_desc = list->Compute.PipelineDesc;
+
+	query.Compute.cs = static_cast<ComputePipelineStateBindings*>(list->Bindings)->CS;
+
+	auto pipelineState = GetPipelineState(&query);
+
+	d12cl->SetComputeRootSignature(list->Bindings->RootSignature);
+	SetRootParams(list);
+	d12cl->SetPipelineState(pipelineState);
+
+	list->ResourcesStateTracker.FireBarriers();
+}
+
+void PostDispatch(GPUCommandList* list) {
+	PostDraw(list);
+}
+
+void Dispatch(GPUCommandList* list, u32 threadGroupX, u32 threadGroupY, u32 threadGroupZ) {
+	PreDispatch(list);
+	list->D12CommandList->Dispatch(threadGroupX, threadGroupY, threadGroupZ);
+	PostDispatch(list);
 }
 
 root_parameter_t* PrepareRootParam(GPUCommandList* list, u64 paramHash) {
@@ -1950,8 +2260,12 @@ root_parameter_t* PrepareRootParam(GPUCommandList* list, u64 paramHash) {
 		Check(param.table.cbv_range_offset >= 0);
 		Check(param.table.length >= 0);
 
-		for (auto i = 0u;i < copySlots; ++i) {
-			list->Root.SrcDescRanges[i] = G_NULL_TEXTURE2D_DESCRIPTOR;
+		for (auto i = 0u;i < param.table.uav_range_offset; ++i) {
+			list->Root.SrcDescRanges[i] = G_NULL_TEXTURE2D_SRV_DESCRIPTOR;
+			list->Root.SrcDescRangeSizes[i] = 1;
+		}
+		for (auto i = param.table.uav_range_offset;i < copySlots; ++i) {
+			list->Root.SrcDescRanges[i] = G_NULL_TEXTURE2D_UAV_DESCRIPTOR;
 			list->Root.SrcDescRangeSizes[i] = 1;
 		}
 
@@ -2050,7 +2364,10 @@ void CopyBufferRegion(GPUCommandList* list, resource_handle dst, u64 srcOffset, 
 }
 
 void SetTexture2D(GPUCommandList* list, TextId slot, resource_slice_t resource) {
-	Check(Contains(list->Bindings->Texture2DParams, slot));
+	if (!Contains(list->Bindings->Texture2DParams, slot)) {
+		Warning(Format("texture2d %s not found\n", (const char*)GetString(slot)), true, TYPE_ID("ShaderBindings"));
+		return;
+	}
 	auto const& binding = list->Bindings->Texture2DParams[slot];
 	auto rootParamPtr = PrepareRootParam(list, binding.root_parameter_hash);
 	Check(binding.table_slot < rootParamPtr->table.length);
@@ -2058,7 +2375,30 @@ void SetTexture2D(GPUCommandList* list, TextId slot, resource_slice_t resource) 
 	auto index = rootParamPtr->binding.table.src_array_offset + binding.table_slot;
 	list->Root.SrcDescRanges[index] = GetResourceFast(resource.handle)->srv;
 	list->Root.SrcDescRangeSizes[index] = 1;
+
+	if (!GetResourceFast(resource.handle)->is_read_only) {
+		list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	}
 }
+
+
+void SetRWTexture2D(GPUCommandList* list, TextId slot, resource_slice_t resource) {
+	if (!Contains(list->Bindings->RWTexture2DParams, slot)) {
+		Warning(Format("rwtexture2d %s not found\n", (const char*)GetString(slot)), true, TYPE_ID("ShaderBindings"));
+		return;
+	}
+	
+	auto const& binding = list->Bindings->RWTexture2DParams[slot];
+	auto rootParamPtr = PrepareRootParam(list, binding.root_parameter_hash);
+	Check(binding.table_slot < rootParamPtr->table.length);
+
+	auto index = rootParamPtr->binding.table.src_array_offset + binding.table_slot;
+	list->Root.SrcDescRanges[index] = GetUAV(resource);
+	list->Root.SrcDescRangeSizes[index] = 1;
+
+	list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+}
+
 
 //////////////////////////////////////////////////////
 
@@ -2077,6 +2417,10 @@ void ShutdownRenderingEngines() {
 		_delete(kv.value);
 	}
 	FreeMemory(CachedShaderStateBindings);
+	for (auto kv : CachedComputeShaderStateBindings) {
+		_delete(kv.value);
+	}
+	FreeMemory(CachedComputeShaderStateBindings);
 
 	for (auto kv : PipelineByHash) {
 		kv.value->Release();

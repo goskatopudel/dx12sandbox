@@ -41,15 +41,20 @@ struct resource_slice_t {
 enum TextureFlags {
 	NO_TEXTURE_FLAGS = 0,
 	ALLOW_RENDER_TARGET = 1,
-	ALLOW_DEPTH_STENCIL = 2
+	ALLOW_DEPTH_STENCIL = 2,
+	ALLOW_UNORDERED_ACCESS = 4,
+	TEX_MIPMAPPED = 8,
+	TEX_VIRTUAL = 0x10
 };
+DEFINE_ENUM_FLAG_OPERATORS(TextureFlags);
 
 enum DsvAccessEnum {
 	DSV_WRITE_ALL = 0,
 	DSV_READ_ONLY_DEPTH,
 	DSV_READ_ONLY_STENCIL,
 	DSV_READ_ONLY,
-	DSV_ACCESS_COUNT
+	DSV_ACCESS_COUNT,
+	DSV_NO_STENCIL_ACCESS_COUNT = DSV_READ_ONLY_STENCIL
 };
 
 resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
@@ -58,17 +63,36 @@ void			CopyFromCpuToSubresources(class GPUQueue* queue, resource_slice_t dstReso
 void	InitResources();
 void	ShutdownResources();
 
-struct resource_fast_t {
-	ID3D12Resource*		resource;
-	CPU_DESC_HANDLE		srv;
-	u32					is_read_only;
+enum ResourceCreationType {
+	UNKNOWN_RESOURCE,
+	COMMITED_RESOURCE,
+	RESERVED_RESOURCE
 };
 
 enum ResourceHeapType {
-	UNKOWN_MEMORY,
+	UNKNOWN_MEMORY,
 	DEFAULT_MEMORY,
 	UPLOAD_MEMORY,
 	READBACK_MEMORY
+};
+
+struct resource_t {
+	ID3D12Resource*				resource;
+	u32							subresources_num;
+	u64							width;
+	u64							height;
+	u16							miplevels;
+	u16							depth_or_array_size;
+	D3D12_RESOURCE_DESC			desc;
+	ResourceCreationType		creation_type;
+	ResourceHeapType			heap_type;
+	TextId						debug_name;
+};
+
+struct resource_fast_t {
+	ID3D12Resource*		resource;
+	CPU_DESC_HANDLE		srv;
+	u32					is_read_only : 1;
 };
 
 struct resource_transition_t {
@@ -81,13 +105,25 @@ struct resource_rtv_t {
 	DXGI_FORMAT					format;
 };
 
-extern CPU_DESC_HANDLE	G_NULL_TEXTURE2D_DESCRIPTOR;
+struct resource_dsv_t {
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor;
+	DXGI_FORMAT					format;
+};
 
+struct resource_srv_t {
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor;
+};
+
+extern CPU_DESC_HANDLE	G_NULL_TEXTURE2D_SRV_DESCRIPTOR;
+extern CPU_DESC_HANDLE	G_NULL_TEXTURE2D_UAV_DESCRIPTOR;
+
+resource_t*				GetResourceInfo(resource_handle);
 resource_fast_t*		GetResourceFast(resource_handle);
 resource_transition_t*	GetResourceTransitionInfo(resource_handle);
 
 resource_rtv_t			GetRTV(resource_slice_t resource);
-resource_rtv_t			GetDSV(resource_slice_t resource, DsvAccessEnum access = DSV_WRITE_ALL);
+resource_dsv_t			GetDSV(resource_slice_t resource, DsvAccessEnum access = DSV_WRITE_ALL);
+CPU_DESC_HANDLE			GetUAV(resource_slice_t resource);
 
 void					Delete(resource_handle);
 void					DeregisterSwapChainBuffers();

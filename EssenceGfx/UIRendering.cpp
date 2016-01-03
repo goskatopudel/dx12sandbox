@@ -20,14 +20,11 @@ namespace ImGuiGlobals {
 GPUCommandList* commandList;
 };
 
-GPUCommandList* RenderUserInterface(GPUQueue* queue) {
+void RenderUserInterface(GPUCommandList* commandList) {
 	PROFILE_SCOPE(render_ui);
-
-	auto cmdList = GetCommandList(queue, NAME_("Gui"));
 	LazyInit();
-	ImGuiGlobals::commandList = cmdList;
+	ImGuiGlobals::commandList = commandList;
 	ImGui::Render();
-	return cmdList;
 }
 
 inline resource_handle TexIdToHandle(void* texID) {

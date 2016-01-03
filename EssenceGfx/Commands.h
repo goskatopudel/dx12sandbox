@@ -59,9 +59,10 @@ enum ClearDepthFlagEnum {
 	CLEAR_STENCIL = 2,
 	CLEAR_ALL = 3 
 };
-void						ClearDepthStencil(GPUCommandList* list, resource_slice_t, ClearDepthFlagEnum flags = CLEAR_ALL, float depth = 1.f, u8 stencil = 0);
-
+void						ClearDepthStencil(GPUCommandList*, resource_slice_t, ClearDepthFlagEnum flags = CLEAR_ALL, float depth = 1.f, u8 stencil = 0);
+void						ClearUnorderedAccess(GPUCommandList*, resource_slice_t resource);
 void						SetShaderState	(GPUCommandList*, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory);
+void						SetComputeShaderState(GPUCommandList*, shader_handle cs);
 void						SetTopology(GPUCommandList*, D3D_PRIMITIVE_TOPOLOGY topology);
 void						SetRenderTarget(GPUCommandList*, u32 index, resource_slice_t resource);
 void						SetRasterizer(GPUCommandList*, D3D12_RASTERIZER_DESC const& desc);
@@ -70,11 +71,13 @@ void						SetDepthStencil(GPUCommandList*, resource_slice_t resource);
 void						SetViewport(GPUCommandList*, float width, float height, float x = 0, float y = 0, float minDepth = 0, float maxDepth = 1);
 void						SetScissorRect(GPUCommandList* list, D3D12_RECT rect);
 void						Draw(GPUCommandList*, u32 vertexCount, u32 startVertex = 0, u32 instances = 1, u32 startInstance = 0);
-void						DrawIndexed(GPUCommandList* list, u32 indexCount, u32 startIndex = 0, i32 baseVertex = 0, u32 instances = 1, u32 startInstance = 0);
+void						DrawIndexed(GPUCommandList*, u32 indexCount, u32 startIndex = 0, i32 baseVertex = 0, u32 instances = 1, u32 startInstance = 0);
+void						Dispatch(GPUCommandList*, u32 threadGroupX, u32 threadGroupY, u32 threadGroupZ);
 void						SetConstant(GPUCommandList*, TextId var, const void* srcPtr, size_t srcSize);
 void						SetTexture2D(GPUCommandList*, TextId slot, resource_slice_t resource);
+void						SetRWTexture2D(GPUCommandList*, TextId slot, resource_slice_t resource);
 void						SetVertexStream(GPUCommandList*, u32 index, buffer_location_t stream);
-void						SetIndexBuffer(GPUCommandList* list, buffer_location_t stream);
+void						SetIndexBuffer(GPUCommandList*, buffer_location_t stream);
 upload_allocation_t			AllocateSmallUploadMemory(GPUCommandList*, u64 size, u64 alignment);
 
 template<typename T> void	SetConstant(GPUCommandList* list, TextId var, T const&srcRef) {

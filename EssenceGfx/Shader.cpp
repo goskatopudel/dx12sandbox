@@ -8,6 +8,26 @@
 
 namespace Essence {
 
+struct shader_macro_t {
+	const char*	name;
+	const char* define;
+};
+
+struct ShaderDefines {
+	ShaderDefines() {}
+	ShaderDefines(std::initializer_list<shader_macro_t> macros) {
+		Array<shader_macro_t> list(GetThreadScratchAllocator());
+		Reserve(list, macros.size());
+		for (auto item : macros) {
+			PushBack(list, item);
+		}
+		quicksort(list.DataPtr, 0, Size(list), [](shader_macro_t a, shader_macro_t b) {
+			return strcmp(a.name, b.name) < 0;
+		});
+		
+	}
+};
+
 const char *GetProfileStr(ShaderProfileEnum profile) {
 	switch (profile) {
 	case VS_5_0:
@@ -32,16 +52,10 @@ struct shader_key_t {
 	ShaderProfileEnum	profile;
 };
 
-struct shader_metadata_t {
-	ResourceNameId		file;
-	TextId				function;
-	ShaderProfileEnum	profile;
-};
-
 void Compile(shader_handle handle, shader_key_t const& desc);
 
 Hashmap<shader_key_t, shader_handle>		ShadersIndex;
-Freelist<shader_metadata_t, shader_handle>	ShadersTable;
+Freelist<shader_key_t, shader_handle>		ShadersTable;
 Array<shader_bytecode_t>					ShadersFastData;
 RWLock										ReadWriteLock;
 
@@ -51,7 +65,7 @@ shader_handle		Create(shader_key_t const& key) {
 	auto handle = Create(ShadersTable);
 	Set(ShadersIndex, key, handle);
 
-	ShadersTable[handle] = {};
+	ShadersTable[handle] = key;
 
 	if (Size(ShadersFastData) < handle.GetIndex() + 1) {
 		Resize(ShadersFastData, handle.GetIndex() + 1);
@@ -90,6 +104,10 @@ shader_handle		GetShader(ResourceNameId file, TextId function, ShaderProfileEnum
 shader_bytecode_t	GetShaderBytecode(shader_handle shader) {
 	Check(Contains(ShadersTable, shader));
 	return ShadersFastData[shader.GetIndex()];
+}
+
+AString	GetShaderDisplayString(shader_handle shader) {
+	return Format("%s:%s()", (cstr)GetString(ShadersTable[shader].file), (cstr)GetString(ShadersTable[shader].function));
 }
 
 void*	Copy(IAllocator* allocator, const void* src, u64 bytesize) {

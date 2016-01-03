@@ -291,8 +291,6 @@ int main(int argc, char * argv[]) {
 	GApplicationShutdownFunction = Shutdown;
 
 	GApplicationWindowResizeFunction = []() {
-		WaitForCompletion();
-		ResizeSwapChain(GDisplaySettings.resolution.x, GDisplaySettings.resolution.y);
 		CreateScreenResources();
 	};
 

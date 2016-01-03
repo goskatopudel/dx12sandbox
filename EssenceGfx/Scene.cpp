@@ -3,9 +3,6 @@
 #include "Camera.h"
 #include "Scheduler.h"
 
-extern Essence::resource_handle RT_A;
-extern Essence::resource_handle DepthBuffer;
-
 namespace Essence {
 
 Scene::~Scene() {
@@ -241,8 +238,8 @@ void ParallelRenderSceneRange(const void* InArgs, Job*) {
 
 		for (auto i : MakeRange(renderData->submeshes.num)) {
 			SetShaderState(drawCmds, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
-			SetRenderTarget(drawCmds, 0, Slice(RT_A));
-			SetDepthStencil(drawCmds, Slice(DepthBuffer));
+			//SetRenderTarget(drawCmds, 0, Slice(RT_A));
+			//SetDepthStencil(drawCmds, Slice(DepthBuffer));
 			SetViewport(drawCmds, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 			SetTopology(drawCmds, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
@@ -286,7 +283,7 @@ void ParallelRenderSceneRoot(const void* InArgs, Job* job) {
 	RunJobs(children, (u32)Size(*Args.SubtasksData));
 }
 
-GPUFenceHandle ParallelRenderScene(GPUQueue* queue, Scene &Scene, GPUCommandList* drawCmds, ICameraControler* pCamera) {
+void ParallelRenderScene(GPUQueue* queue, Scene &Scene, GPUCommandList* drawCmds, render_scene_setup const* setup) {
 	Check(IsMainThread());
 
 	PROFILE_SCOPE(render_scene);
@@ -308,7 +305,7 @@ GPUFenceHandle ParallelRenderScene(GPUQueue* queue, Scene &Scene, GPUCommandList
 		payload.pScene = &Scene;
 		payload.from = i;
 		payload.to = min(N, i + objectsPerBatch);
-		payload.pCamera = pCamera;
+		payload.pCamera = setup->pcamera;
 		payload.pEntityHandles = &workspace;
 		payload.CommandList = GetCommandList(queue, NAME_("RenderWork"));
 		PushBack(childWorkspaces, payload);
@@ -323,19 +320,15 @@ GPUFenceHandle ParallelRenderScene(GPUQueue* queue, Scene &Scene, GPUCommandList
 	WaitFor(rootJob, true);
 
 	if (!Size(childWorkspaces)) {
-		return {};
+		return;
 	}
-
-	auto fence = GetFence(Back(childWorkspaces).CommandList);
 
 	for (auto& payload : childWorkspaces) {
 		Execute(payload.CommandList);
 	}
+};
 
-	return fence;
-}
-
-void RenderScene(Scene &Scene, GPUCommandList* drawCmds, ICameraControler* pCamera) {
+void RenderScene(Scene &Scene, GPUCommandList* drawCmds, render_scene_setup const* setup) {
 
 	using namespace DirectX;
 
@@ -350,15 +343,15 @@ void RenderScene(Scene &Scene, GPUCommandList* drawCmds, ICameraControler* pCame
 				));
 
 		auto viewProjMatrix = XMMatrixTranspose(
-			pCamera->GetViewMatrix()
+			setup->pcamera->GetViewMatrix()
 			* XMMatrixPerspectiveFovLH(3.14f * 0.25f, (float)GDisplaySettings.resolution.x / (float)GDisplaySettings.resolution.y, 0.01f, 1000.f));
 
 		auto renderData = GetModelRenderData(entity.model);
 
 		for (auto i : MakeRange(renderData->submeshes.num)) {
 			SetShaderState(drawCmds, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
-			SetRenderTarget(drawCmds, 0, Slice(RT_A));
-			SetDepthStencil(drawCmds, Slice(DepthBuffer));
+			/*SetRenderTarget(drawCmds, 0, Slice(RT_A));
+			SetDepthStencil(drawCmds, Slice(DepthBuffer));*/
 			SetViewport(drawCmds, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 			SetTopology(drawCmds, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 

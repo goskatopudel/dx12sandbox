@@ -30,6 +30,7 @@ struct shader_bytecode_t {
 
 shader_handle		GetShader(ResourceNameId file, TextId function, ShaderProfileEnum profile);
 shader_bytecode_t	GetShaderBytecode(shader_handle shader);
+AString	GetShaderDisplayString(shader_handle shader);
 
 void ReloadShaders();
 void FreeShadersMemory();

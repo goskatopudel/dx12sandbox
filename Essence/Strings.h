@@ -10,6 +10,8 @@ namespace Essence {
 
 class IAllocator;
 
+typedef const char* cstr;
+
 struct AString {
 	Array<char> Chars;
 

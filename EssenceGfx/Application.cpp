@@ -174,6 +174,8 @@ i32 RunApplicationMainLoop() {
 						{
 							GDisplaySettings.resolution.x = event.window.data1;
 							GDisplaySettings.resolution.y = event.window.data2;
+							WaitForCompletion();
+							ResizeSwapChain(GDisplaySettings.resolution.x, GDisplaySettings.resolution.y);
 							GApplicationWindowResizeFunction();
 						}
 						break;
