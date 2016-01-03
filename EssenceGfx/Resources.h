@@ -103,15 +103,31 @@ struct resource_transition_t {
 struct resource_rtv_t {
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor;
 	DXGI_FORMAT					format;
+	resource_slice_t			slice;
 };
 
 struct resource_dsv_t {
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor;
 	DXGI_FORMAT					format;
+	resource_slice_t			slice;
+	u32							has_stencil : 1;
 };
+
+inline bool IsValid(resource_dsv_t dsv) {
+	return IsValid(dsv.slice.handle);
+}
 
 struct resource_srv_t {
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor;
+	resource_slice_t			slice;
+	u8							fixed_state : 1;
+	u8							is_depth : 1;
+	u8							is_stencil : 1;
+};
+
+struct resource_uav_t {
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor;
+	resource_slice_t			slice;
 };
 
 extern CPU_DESC_HANDLE	G_NULL_TEXTURE2D_SRV_DESCRIPTOR;
@@ -121,9 +137,17 @@ resource_t*				GetResourceInfo(resource_handle);
 resource_fast_t*		GetResourceFast(resource_handle);
 resource_transition_t*	GetResourceTransitionInfo(resource_handle);
 
-resource_rtv_t			GetRTV(resource_slice_t resource);
-resource_dsv_t			GetDSV(resource_slice_t resource, DsvAccessEnum access = DSV_WRITE_ALL);
-CPU_DESC_HANDLE			GetUAV(resource_slice_t resource);
+resource_rtv_t			GetRTV(resource_handle resource);
+resource_rtv_t			GetRTV(resource_handle resource, u32 mipmap);
+
+resource_dsv_t			GetDSV(resource_handle resource);
+resource_dsv_t			GetDSV(resource_handle resource, u32 mipmap);
+
+resource_uav_t			GetUAV(resource_handle resource);
+resource_uav_t			GetUAV(resource_handle resource, u32 mipmap);
+
+resource_srv_t			GetSRV(resource_handle resource);
+resource_srv_t			GetSRV(resource_handle resource, u32 mipmap);
 
 void					Delete(resource_handle);
 void					DeregisterSwapChainBuffers();

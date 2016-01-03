@@ -250,6 +250,7 @@
     <ClInclude Include="Strings.h" />
     <ClInclude Include="Thread.h" />
     <ClInclude Include="Types.h" />
+    <ClInclude Include="Views.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Assertion.cpp" />

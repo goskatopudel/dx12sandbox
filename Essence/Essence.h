@@ -7,6 +7,7 @@
 #include "Maths.h"
 #include "Debug.h"
 #include "Collections.h"
+#include "Views.h"
 #include "Algorithms.h"
 #include "Hash.h"
 #include "Pointers.h"

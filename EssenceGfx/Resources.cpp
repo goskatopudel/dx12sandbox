@@ -21,7 +21,7 @@ struct resource_bind_t {
 };
 
 struct resource_bind_ext_t {
-	//resource_bind_t
+	array_view<resource_bind_t> subresources;
 };
 
 DXGI_FORMAT GetDepthStencilFormat(DXGI_FORMAT format) {
@@ -174,43 +174,65 @@ CPU_DESC_HANDLE ToCPUHandle(descriptor_allocation_t allocation, i32 offset = 0) 
 	return allocation.allocator->GetCPUHandle(allocation, offset);
 }
 
-resource_rtv_t GetRTV(resource_slice_t resource) {
-	if (IsValid(resource.handle) && resource.subresource == 0) {
-		Check(Contains(ResourcesTable, resource.handle));
-		auto location = ResourcesViews[resource.handle.GetIndex()].rtv_location;
+resource_rtv_t			GetRTV(resource_handle resource) {
+	resource_rtv_t rtv = {};
 
-		resource_rtv_t out;
-		out.cpu_descriptor = ToCPUHandle(location);
-		out.format = ResourcesTable[resource.handle].desc.Format;
-
-		return out;
+	if (IsValid(resource)) {
+		rtv.slice = Slice(resource);
+		rtv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].rtv_location);
+		rtv.format = ResourcesTable[resource].desc.Format;
 	}
-	return {};
+
+	return rtv;
 }
 
-resource_dsv_t GetDSV(resource_slice_t resource, DsvAccessEnum access) {
-	if (resource.subresource == 0) {
-		Check(Contains(ResourcesTable, resource.handle));
-		auto location = ResourcesViews[resource.handle.GetIndex()].dsv_locations;
+resource_rtv_t			GetRTV(resource_handle resource, u32 mipmap);
 
-		resource_dsv_t out;
-		out.cpu_descriptor = ToCPUHandle(location, access);
-		out.format = GetDepthStencilFormat(ResourcesTable[resource.handle].desc.Format);
+resource_dsv_t			GetDSV(resource_handle resource) {
+	resource_dsv_t dsv = {};
 
-		return out;
+	if (IsValid(resource)) {
+		dsv.slice = Slice(resource);
+		dsv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].dsv_locations);
+		dsv.format = GetDepthStencilFormat(ResourcesTable[resource].desc.Format);
+		dsv.has_stencil = ResourcesViews[resource.GetIndex()].dsv_locations.size == DSV_ACCESS_COUNT;
 	}
-	return{};
+
+	return dsv;
 }
 
-CPU_DESC_HANDLE GetUAV(resource_slice_t resource) {
-	if (resource.subresource == 0) {
-		Check(Contains(ResourcesTable, resource.handle));
-		auto location = ResourcesViews[resource.handle.GetIndex()].uav_location;
+resource_dsv_t			GetDSV(resource_handle resource, u32 mipmap);
 
-		return ToCPUHandle(location);
+resource_uav_t			GetUAV(resource_handle resource) {
+	resource_uav_t uav = {};
+
+	if (IsValid(resource)) {
+		uav.slice = Slice(resource);
+		uav.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].uav_location);
 	}
-	return{};
+
+	return uav;
 }
+
+resource_uav_t			GetUAV(resource_handle resource, u32 mipmap);
+
+resource_srv_t			GetSRV(resource_handle resource) {
+	resource_srv_t srv = {};
+
+	if (IsValid(resource)) {
+		srv.slice = Slice(resource);
+		srv.cpu_descriptor = GetResourceFast(resource)->srv;
+		srv.fixed_state = GetResourceFast(resource)->is_read_only;
+
+		if (!srv.fixed_state) {
+			srv.is_depth = ResourcesViews[resource.GetIndex()].dsv_locations.size;
+		}
+	}
+
+	return srv;
+}
+
+resource_srv_t			GetSRV(resource_handle resource, u32 mipmap);
 
 resource_handle CreateReservedResource(D3D12_RESOURCE_DESC const* desc, const char *debugName, D3D12_CLEAR_VALUE const* clearValue, D3D12_RESOURCE_STATES initialState) {
 	ID3D12Resource *resource;

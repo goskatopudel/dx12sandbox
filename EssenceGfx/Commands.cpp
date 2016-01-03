@@ -65,6 +65,27 @@ void GetD3D12StateDefaults(D3D12_RASTERIZER_DESC *pDest) {
 	*pDest = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
 }
 
+bool IsDepthReadOnly(D3D12_GRAPHICS_PIPELINE_STATE_DESC const* desc) {
+	return 
+		desc->DepthStencilState.DepthEnable == false ||
+		desc->DepthStencilState.DepthFunc == D3D12_COMPARISON_FUNC_NEVER ||
+		desc->DepthStencilState.DepthWriteMask == 0;
+}
+
+bool IsStencilReadOnly(D3D12_GRAPHICS_PIPELINE_STATE_DESC const* desc) {
+	return 
+		desc->DepthStencilState.StencilEnable == false ||
+		desc->DepthStencilState.StencilWriteMask == 0 ||
+		(desc->DepthStencilState.FrontFace.StencilFunc == D3D12_COMPARISON_FUNC_NEVER ||
+			(desc->DepthStencilState.FrontFace.StencilDepthFailOp == D3D12_STENCIL_OP_KEEP
+			&& desc->DepthStencilState.FrontFace.StencilFailOp == D3D12_STENCIL_OP_KEEP
+			&& desc->DepthStencilState.FrontFace.StencilPassOp == D3D12_STENCIL_OP_KEEP)) ||
+		(desc->DepthStencilState.BackFace.StencilFunc == D3D12_COMPARISON_FUNC_NEVER ||
+			(desc->DepthStencilState.BackFace.StencilDepthFailOp == D3D12_STENCIL_OP_KEEP
+			&& desc->DepthStencilState.BackFace.StencilFailOp == D3D12_STENCIL_OP_KEEP
+			&& desc->DepthStencilState.BackFace.StencilPassOp == D3D12_STENCIL_OP_KEEP));
+}
+
 // threadsafe ringbuffer, not suited for bigger allocations
 class UploadHeapAllocator {
 public:
@@ -653,6 +674,8 @@ struct constantbuffer_cpudata_t {
 	u32		size;
 };
 
+const u32 MAX_RTVS = D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT;
+
 class GPUCommandList {
 public:
 	// own-ptrs
@@ -679,12 +702,8 @@ public:
 		D3D12_VIEWPORT							Viewport;
 		D3D12_RECT								ScissorRect;
 		D3D_PRIMITIVE_TOPOLOGY					Topology;
-		DXGI_FORMAT								RTVFormats[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
-		CPU_DESC_HANDLE							RTVDescriptors[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
-		resource_slice_t						RTResources[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
-		DXGI_FORMAT								DSVFormat;
-		CPU_DESC_HANDLE							DSVDescriptor;
-		resource_slice_t						DSResource;
+		resource_rtv_t							RTVs[MAX_RTVS];
+		resource_dsv_t							DSV;
 		u32										NumRenderTargets;
 		vertex_factory_handle					VertexFactory;
 		D3D12_VERTEX_BUFFER_VIEW				VertexStreams[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
@@ -1088,34 +1107,34 @@ void CopyResource(GPUCommandList* list, resource_handle dst, resource_handle src
 	list->D12CommandList->CopyResource(GetResourceFast(dst)->resource, GetResourceFast(src)->resource);
 }
 
-void ClearRenderTarget(GPUCommandList* list, resource_slice_t resource, float4 color) {
-	list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_RENDER_TARGET);
+void ClearRenderTarget(GPUCommandList* list, resource_rtv_t rtv, float4 color) {
+	list->ResourcesStateTracker.Transition(rtv.slice, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	list->ResourcesStateTracker.FireBarriers();
 	float c[4];
 	c[0] = color.x;
 	c[1] = color.y;
 	c[2] = color.z;
 	c[3] = color.w;
-	list->D12CommandList->ClearRenderTargetView(GetRTV(resource).cpu_descriptor, c, 0, nullptr);
+	list->D12CommandList->ClearRenderTargetView(rtv.cpu_descriptor, c, 0, nullptr);
 }
 
-void ClearUnorderedAccess(GPUCommandList* list, resource_slice_t resource) {
-	list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+void ClearUnorderedAccess(GPUCommandList* list, resource_uav_t uav) {
+	list->ResourcesStateTracker.Transition(uav.slice, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	list->ResourcesStateTracker.FireBarriers();
 	u32 values[4] = { 0, 0, 0, 0 };
 	auto viewAlloc = GpuDescriptorsAllocator.AllocateTemporary(1);
-	GD12Device->CopyDescriptorsSimple(1, GetCPUHandle(viewAlloc), GetUAV(resource), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-	list->D12CommandList->ClearUnorderedAccessViewUint(GetGPUHandle(viewAlloc), GetUAV(resource), GetResourceFast(resource.handle)->resource, values, 0, nullptr);
+	GD12Device->CopyDescriptorsSimple(1, GetCPUHandle(viewAlloc), uav.cpu_descriptor, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	list->D12CommandList->ClearUnorderedAccessViewUint(GetGPUHandle(viewAlloc), uav.cpu_descriptor, GetResourceFast(uav.slice.handle)->resource, values, 0, nullptr);
 }
 
-void ClearDepthStencil(GPUCommandList* list, resource_slice_t resource, ClearDepthFlagEnum flags, float depth, u8 stencil) {
-	list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+void ClearDepthStencil(GPUCommandList* list, resource_dsv_t dsv, ClearDepthFlagEnum flags, float depth, u8 stencil) {
+	list->ResourcesStateTracker.Transition(dsv.slice, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 	list->ResourcesStateTracker.FireBarriers();
 
 	auto access = DSV_WRITE_ALL;
 	access = (flags == CLEAR_STENCIL) ? DSV_READ_ONLY_DEPTH : access;
 	access = (flags == CLEAR_DEPTH) ? DSV_READ_ONLY_STENCIL : access;
-	list->D12CommandList->ClearDepthStencilView(GetDSV(resource, access).cpu_descriptor, (D3D12_CLEAR_FLAGS)flags, depth, stencil, 0, nullptr);
+	list->D12CommandList->ClearDepthStencilView(dsv.cpu_descriptor, (D3D12_CLEAR_FLAGS)flags, depth, stencil, 0, nullptr);
 }
 
 void QueueWait(GPUQueue* queue, GPUFenceHandle handle) {
@@ -2083,23 +2102,18 @@ D3D12_PRIMITIVE_TOPOLOGY_TYPE GetPrimitiveTopologyType(D3D_PRIMITIVE_TOPOLOGY to
 	return D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED;
 }
 
-void SetRenderTarget(GPUCommandList* list, u32 index, resource_slice_t resource) {
-	auto rtv = GetRTV(resource);
-	list->Graphics.RTVFormats[index] = rtv.format;
-	list->Graphics.RTVDescriptors[index] = rtv.cpu_descriptor;
-	list->Graphics.RTResources[index] = resource;
+void SetRenderTarget(GPUCommandList* list, u32 index, resource_rtv_t rtv) {
+	list->Graphics.RTVs[index] = rtv;
 
-	if (IsValid(resource.handle)) {
+	if (IsValid(rtv.slice.handle)) {
 		list->Graphics.NumRenderTargets = max(list->Graphics.NumRenderTargets, index + 1);
 	}
 	else {
-		list->Graphics.RTVFormats[index] = {};
-		list->Graphics.RTVDescriptors[index] = {};
-		list->Graphics.RTResources[index] = {};
+		list->Graphics.RTVs[index] = {};
 
 		i32 maxIndex = -1;
 		for (i32 i = 0; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i) {
-			if (list->Graphics.RTVDescriptors[i].ptr) {
+			if (IsValid(list->Graphics.RTVs[i].slice.handle)) {
 				maxIndex = i;
 			}
 		}
@@ -2107,17 +2121,12 @@ void SetRenderTarget(GPUCommandList* list, u32 index, resource_slice_t resource)
 	}
 }
 
-void SetDepthStencil(GPUCommandList* list, resource_slice_t resource) {
-	if (IsValid(resource.handle)) {
-		auto dsv = GetDSV(resource);
-		list->Graphics.DSVFormat = dsv.format;
-		list->Graphics.DSVDescriptor = dsv.cpu_descriptor;
-		list->Graphics.DSResource = resource;
+void SetDepthStencil(GPUCommandList* list, resource_dsv_t dsv) {
+	if (IsValid(dsv.slice.handle)) {
+		list->Graphics.DSV = dsv;
 	}
 	else{
-		list->Graphics.DSVFormat = {};
-		list->Graphics.DSVDescriptor = {};
-		list->Graphics.DSResource = {};
+		list->Graphics.DSV = {};
 	}
 }
 
@@ -2150,11 +2159,13 @@ void PreDraw(GPUCommandList* list) {
 	pipeline_query_t query;
 	query.Type = PIPELINE_GRAPHICS;
 	query.Graphics.graphics_desc = list->Graphics.PipelineDesc;
-	query.Graphics.graphics_desc.DepthStencilState.DepthEnable = list->Graphics.DSVFormat != DXGI_FORMAT_UNKNOWN;
+	query.Graphics.graphics_desc.DepthStencilState.DepthEnable = IsValid(list->Graphics.DSV);
 	query.Graphics.graphics_desc.PrimitiveTopologyType = GetPrimitiveTopologyType(list->Graphics.Topology);
 	query.Graphics.graphics_desc.NumRenderTargets = list->Graphics.NumRenderTargets;
-	memcpy(&query.Graphics.graphics_desc.RTVFormats, list->Graphics.RTVFormats, sizeof(list->Graphics.RTVFormats));
-	query.Graphics.graphics_desc.DSVFormat = list->Graphics.DSVFormat;
+	for (auto i = 0; i < _countof(list->Graphics.RTVs); ++i) {
+		query.Graphics.graphics_desc.RTVFormats[i] = list->Graphics.RTVs[i].format;
+	}
+	query.Graphics.graphics_desc.DSVFormat = list->Graphics.DSV.format;
 
 	query.Graphics.vs = static_cast<GraphicsPipelineStateBindings*>(list->Bindings)->VS;
 	query.Graphics.ps = static_cast<GraphicsPipelineStateBindings*>(list->Bindings)->PS;
@@ -2170,13 +2181,18 @@ void PreDraw(GPUCommandList* list) {
 	d12cl->SetPipelineState(pipelineState);
 	d12cl->IASetPrimitiveTopology(list->Graphics.Topology);
 	d12cl->IASetVertexBuffers(0, list->Graphics.VertexStreamsNum, list->Graphics.VertexStreams);
-	d12cl->OMSetRenderTargets(list->Graphics.NumRenderTargets, list->Graphics.RTVDescriptors, false, list->Graphics.DSVFormat != DXGI_FORMAT_UNKNOWN ? &list->Graphics.DSVDescriptor : nullptr);
+
+	CPU_DESC_HANDLE rtvs[MAX_RTVS];
+	for (auto i = 0u; i < list->Graphics.NumRenderTargets; ++i) {
+		rtvs[i] = list->Graphics.RTVs[i].cpu_descriptor;
+	}
+	d12cl->OMSetRenderTargets(list->Graphics.NumRenderTargets, rtvs, false, IsValid(list->Graphics.DSV) ? &list->Graphics.DSV.cpu_descriptor : nullptr);
 
 	for (auto i : MakeRange(list->Graphics.NumRenderTargets)) {
-		list->ResourcesStateTracker.Transition(list->Graphics.RTResources[i], D3D12_RESOURCE_STATE_RENDER_TARGET);
+		list->ResourcesStateTracker.Transition(list->Graphics.RTVs[i].slice, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	}
-	if (list->Graphics.DSVFormat != DXGI_FORMAT_UNKNOWN) {
-		list->ResourcesStateTracker.Transition(list->Graphics.DSResource, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+	if (IsValid(list->Graphics.DSV)) {
+		list->ResourcesStateTracker.Transition(list->Graphics.DSV.slice, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 	}
 
 	list->ResourcesStateTracker.FireBarriers();
@@ -2363,7 +2379,7 @@ void CopyBufferRegion(GPUCommandList* list, resource_handle dst, u64 srcOffset, 
 	list->D12CommandList->CopyBufferRegion(GetResourceFast(dst)->resource, srcOffset, GetResourceFast(src)->resource, dstOffset, size);
 }
 
-void SetTexture2D(GPUCommandList* list, TextId slot, resource_slice_t resource) {
+void SetTexture2D(GPUCommandList* list, TextId slot, resource_srv_t srv) {
 	if (!Contains(list->Bindings->Texture2DParams, slot)) {
 		Warning(Format("texture2d %s not found\n", (const char*)GetString(slot)), true, TYPE_ID("ShaderBindings"));
 		return;
@@ -2373,16 +2389,16 @@ void SetTexture2D(GPUCommandList* list, TextId slot, resource_slice_t resource) 
 	Check(binding.table_slot < rootParamPtr->table.length);
 
 	auto index = rootParamPtr->binding.table.src_array_offset + binding.table_slot;
-	list->Root.SrcDescRanges[index] = GetResourceFast(resource.handle)->srv;
+	list->Root.SrcDescRanges[index] = srv.cpu_descriptor;
 	list->Root.SrcDescRangeSizes[index] = 1;
 
-	if (!GetResourceFast(resource.handle)->is_read_only) {
-		list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	if (!srv.fixed_state) {
+		list->ResourcesStateTracker.Transition(srv.slice, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	}
 }
 
 
-void SetRWTexture2D(GPUCommandList* list, TextId slot, resource_slice_t resource) {
+void SetRWTexture2D(GPUCommandList* list, TextId slot, resource_uav_t uav) {
 	if (!Contains(list->Bindings->RWTexture2DParams, slot)) {
 		Warning(Format("rwtexture2d %s not found\n", (const char*)GetString(slot)), true, TYPE_ID("ShaderBindings"));
 		return;
@@ -2393,10 +2409,10 @@ void SetRWTexture2D(GPUCommandList* list, TextId slot, resource_slice_t resource
 	Check(binding.table_slot < rootParamPtr->table.length);
 
 	auto index = rootParamPtr->binding.table.src_array_offset + binding.table_slot;
-	list->Root.SrcDescRanges[index] = GetUAV(resource);
+	list->Root.SrcDescRanges[index] = uav.cpu_descriptor;
 	list->Root.SrcDescRangeSizes[index] = 1;
 
-	list->ResourcesStateTracker.Transition(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	list->ResourcesStateTracker.Transition(uav.slice, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 }
 
 

@@ -109,7 +109,7 @@ void RenderImDrawLists(ImDrawData *draw_data) {
 
 			SetViewport(cmdList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 			SetTopology(cmdList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			SetRenderTarget(cmdList, 0, Slice(GetCurrentBackbuffer()));
+			SetRenderTarget(cmdList, 0, GetRTV(GetCurrentBackbuffer()));
 
 			if (pcmd->UserCallback) {
 				pcmd->UserCallback(cmd_list, pcmd);
@@ -118,7 +118,7 @@ void RenderImDrawLists(ImDrawData *draw_data) {
 				D3D12_RECT scissor = { (LONG)pcmd->ClipRect.x, (LONG)pcmd->ClipRect.y, (LONG)pcmd->ClipRect.z, (LONG)pcmd->ClipRect.w };
 
 				if (pcmd->TextureId) {
-					SetTexture2D(cmdList, TEXT_("Image"), Slice(TexIdToHandle(pcmd->TextureId)));
+					SetTexture2D(cmdList, TEXT_("Image"), GetSRV(TexIdToHandle(pcmd->TextureId)));
 				}
 
 				SetConstant(cmdList, TEXT_("Projection"), matrix);
