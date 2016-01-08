@@ -35,13 +35,13 @@ bool IsExclusiveState(D3D12_RESOURCE_STATES state) {
 	}
 }
 
-bool NeedStateChange(GPUQueueTypeEnum queueType, ResourceHeapType heapType, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+bool NeedStateChange(GPUQueueTypeEnum queueType, ResourceHeapType heapType, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after, bool exclusive = false) {
 	if (heapType != DEFAULT_MEMORY) {
 		return false;
 	}
 
 	if (queueType == DIRECT_QUEUE) {
-		return (after != before) && ((after & before) == 0);
+		return (after != before) && ((after & before) == 0 || exclusive);
 	}
 	else if (queueType == COPY_QUEUE) {
 		return false;
@@ -600,29 +600,37 @@ public:
 	}
 };
 
-
-struct resource_state_t {
-	D3D12_RESOURCE_STATES	state;
+struct resource_tracking_state {
+	u32		resource_state;
+	bool	per_subresource_tracking;
 };
 
-Hashmap<resource_slice_t, resource_state_t>			GResourceStates;
+Hashmap<resource_handle, resource_tracking_state>			GResourceState;
+Hashmap<resource_slice_t, D3D12_RESOURCE_STATES>			GSubresourceState;
 
 class ResourceTracker {
 public:
-	Hashmap<resource_slice_t, resource_state_t>		ExpectedState;
-	Hashmap<resource_slice_t, resource_state_t>		ResourceState;
-	Array<D3D12_RESOURCE_BARRIER>					QueuedBarriers;
-	GPUCommandList*									Owner;
+	Hashmap<resource_handle, resource_tracking_state>	ExpectedState;
+	Hashmap<resource_slice_t, u32>						ExpectedSubresourceState;
+
+	Hashmap<resource_handle, resource_tracking_state>	CurrentState;
+	Hashmap<resource_slice_t, u32>						CurrentSubresourceState;
+
+	Array<D3D12_RESOURCE_BARRIER>						QueuedBarriers;
+	GPUCommandList*										Owner;
 
 	ResourceTracker(GPUCommandList* list);
 	~ResourceTracker();
 
 	void Transition(resource_slice_t resource, D3D12_RESOURCE_STATES after);
 	void FireBarriers();
+	void EnqueueTransition(ID3D12Resource* resource, u32 subresource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after);
 
 	void Clear() {
 		Essence::Clear(ExpectedState);
-		Essence::Clear(ResourceState);
+		Essence::Clear(ExpectedSubresourceState);
+		Essence::Clear(CurrentState);
+		Essence::Clear(CurrentSubresourceState);
 		Check(Size(QueuedBarriers) == 0);
 	}
 };
@@ -914,6 +922,8 @@ void					Close(GPUCommandList* list) {
 	VerifyHr(list->D12CommandList->Close());
 }
 
+const u32 RESOURCE_STATE_UNKNOWN = 0xFFFFFFFF;
+
 void					Execute(GPUCommandList* list) {
 	if (list->State == CL_RECORDING) {
 		Close(list);
@@ -924,10 +934,292 @@ void					Execute(GPUCommandList* list) {
 	Check(Size(list->ResourcesStateTracker.QueuedBarriers) == 0);
 
 	Array<D3D12_RESOURCE_BARRIER> patchupBarriers(GetThreadScratchAllocator());
+
+	auto EnqueueBarrier = [&](ID3D12Resource* resource, u32 subresource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+		D3D12_RESOURCE_BARRIER barrier;
+		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+		barrier.Transition.pResource = resource;
+		barrier.Transition.Subresource = subresource;
+		barrier.Transition.StateBefore = before;
+		barrier.Transition.StateAfter = after;
+		PushBack(patchupBarriers, barrier);
+	};
+
+
+	for (auto kv : list->ResourcesStateTracker.ExpectedState) {
+		if (kv.value.per_subresource_tracking == 0) {
+			auto expected = (D3D12_RESOURCE_STATES)kv.value.resource_state;
+			if (GResourceState[kv.key].per_subresource_tracking == 0) {
+				// whole to whole
+				auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
+				auto expected = (D3D12_RESOURCE_STATES)kv.value.resource_state;
+
+				if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key)->heap_type, before, expected)) {
+					auto after = GetNextState(list->Queue->Type, before, expected);
+					EnqueueBarrier(GetResourceFast(kv.key)->resource, -1, before, after);
+					GResourceState[kv.key].resource_state = (u32)after;
+				}
+			}
+			else {
+				// subres to whole
+				auto subresNum = GetResourceInfo(kv.key)->subresources_num;
+				resource_slice_t query = {};
+				query.handle = kv.key;
+				for (auto subresIndex : MakeRange(subresNum)) {
+					query.subresource = subresIndex + 1;
+
+					auto pSubresState = Get(GSubresourceState, query);
+					auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
+					if (pSubresState) {
+						before = *pSubresState;
+						Remove(GSubresourceState, query);
+					}
+
+					if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key)->heap_type, before, expected, true)) {
+						EnqueueBarrier(GetResourceFast(kv.key)->resource, subresIndex, before, expected);
+					}
+				}
+
+				GResourceState[kv.key].per_subresource_tracking = 0;
+				GResourceState[kv.key].resource_state = (u32)expected;
+			}
+
+		}
+		else if (kv.value.per_subresource_tracking == 1) {
+			auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
+			auto subresNum = GetResourceInfo(kv.key)->subresources_num;
+			if (GResourceState[kv.key].per_subresource_tracking == 0) {
+				// whole to subres
+				auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
+
+				bool change = false;
+
+				auto subresNum = GetResourceInfo(kv.key)->subresources_num;
+				resource_slice_t query = {};
+				query.handle = kv.key;
+
+				for (auto subresIndex : MakeRange(subresNum)) {
+					query.subresource = subresIndex + 1;
+					auto pExpectedState = Get(list->ResourcesStateTracker.ExpectedSubresourceState, query);
+
+					if (kv.value.resource_state == RESOURCE_STATE_UNKNOWN && pExpectedState == nullptr) {
+						continue;
+					}
+
+					auto expected = (D3D12_RESOURCE_STATES)kv.value.resource_state;
+					if (pExpectedState) {
+						expected = (D3D12_RESOURCE_STATES)*pExpectedState;
+					}
+
+					if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key)->heap_type, before, expected)) {
+						auto after = GetNextState(list->Queue->Type, before, expected);
+						EnqueueBarrier(GetResourceFast(kv.key)->resource, subresIndex, before, after);
+						GSubresourceState[query] = after;
+						change = true;
+					}
+				}
+
+				if (change) {
+					GResourceState[kv.key].per_subresource_tracking = 1;
+				}
+			}
+			else {
+				// subres to subres
+
+				auto subresNum = GetResourceInfo(kv.key)->subresources_num;
+				resource_slice_t query = {};
+				query.handle = kv.key;
+				for (auto subresIndex : MakeRange(subresNum)) {
+					query.subresource = subresIndex + 1;
+
+					auto pSubresState = Get(GSubresourceState, query);
+					auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
+					if (pSubresState) {
+						before = *pSubresState;
+						Remove(GSubresourceState, query);
+					}
+					auto pExpectedState = Get(list->ResourcesStateTracker.ExpectedSubresourceState, query);
+
+					if (kv.value.resource_state == RESOURCE_STATE_UNKNOWN && pExpectedState == nullptr) {
+						continue;
+					}
+
+					auto expected = (D3D12_RESOURCE_STATES)kv.value.resource_state;
+					if (pExpectedState) {
+						expected = (D3D12_RESOURCE_STATES)*pExpectedState;
+					}
+					Check((u32)expected != RESOURCE_STATE_UNKNOWN);
+
+					if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key)->heap_type, before, expected)) {
+						auto after = GetNextState(list->Queue->Type, before, expected);
+						EnqueueBarrier(GetResourceFast(kv.key)->resource, subresIndex, before, after);
+						GSubresourceState[query] = after;
+					}
+				}
+			}
+		}
+	}
+
+	//for (auto kv : list->ResourcesStateTracker.ExpectedSubresourceState) {
+	//	if (GResourceState[kv.key.handle].per_subresource_tracking == 0) {
+	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key.handle].resource_state;
+	//		auto expected = (D3D12_RESOURCE_STATES)kv.value;
+	//		Check(kv.key.subresource > 0);
+
+	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key.handle)->heap_type, before, expected)) {
+	//			auto after = GetNextState(list->Queue->Type, before, expected);
+
+	//			D3D12_RESOURCE_BARRIER barrier;
+	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	//			barrier.Transition.pResource = GetResourceFast(kv.key.handle)->resource;
+	//			barrier.Transition.Subresource = kv.key.subresource - 1;
+	//			barrier.Transition.StateBefore = before;
+	//			barrier.Transition.StateAfter = after;
+	//			PushBack(patchupBarriers, barrier);
+
+	//			GSubresourceState[kv.key] = after;
+	//			// todo: defer
+	//			GResourceState[kv.key.handle].per_subresource_tracking = 1;
+	//			Check(0);
+	//		}
+	//	}
+	//	else {
+	//		auto pSubresState = Get(GSubresourceState, kv.key);
+
+	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key.handle].resource_state;
+	//		if (pSubresState) {
+	//			before = *pSubresState;
+	//		}
+	//		auto expected = (D3D12_RESOURCE_STATES)kv.value;
+
+	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key.handle)->heap_type, before, expected)) {
+	//			auto after = GetNextState(list->Queue->Type, before, expected);
+
+	//			D3D12_RESOURCE_BARRIER barrier;
+	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	//			barrier.Transition.pResource = GetResourceFast(kv.key.handle)->resource;
+	//			barrier.Transition.Subresource = kv.key.subresource - 1;
+	//			barrier.Transition.StateBefore = before;
+	//			barrier.Transition.StateAfter = after;
+	//			PushBack(patchupBarriers, barrier);
+
+	//			GSubresourceState[kv.key] = after;
+	//		}
+	//	}
+	//}
+
+	//for (auto kv : list->ResourcesStateTracker.ExpectedState) {
+	//	auto key = kv.key;
+
+	//	if (kv.value.per_subresource_tracking == 0 && GResourceState[kv.key].per_subresource_tracking == 0) {
+	//		Check(kv.value.resource_state != RESOURCE_STATE_UNKNOWN);
+	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
+	//		auto expected = (D3D12_RESOURCE_STATES)kv.value.resource_state;
+
+	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, before, expected)) {
+	//			auto after = GetNextState(list->Queue->Type, before, expected);
+
+	//			D3D12_RESOURCE_BARRIER barrier;
+	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	//			barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
+	//			barrier.Transition.Subresource = -1;
+	//			barrier.Transition.StateBefore = before;
+	//			barrier.Transition.StateAfter = after;
+	//			PushBack(patchupBarriers, barrier);
+
+	//			GResourceState[kv.key].resource_state = after;
+	//		}
+	//	}
+	//	else if(kv.value.per_subresource_tracking == 0) {
+	//		Check(kv.value.resource_state != RESOURCE_STATE_UNKNOWN);
+	//		Check(GResourceState[kv.key].per_subresource_tracking != 0);
+
+	//		auto subresNum = GetResourceInfo(kv.key)->subresources_num;
+	//		resource_slice_t query = {};
+	//		query.handle = kv.key;
+	//		for (auto subresIndex : MakeRange(subresNum)) {
+	//			query.subresource = subresIndex + 1;
+
+	//			auto pSubresState = Get(GSubresourceState, query);
+	//			if (pSubresState && NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, *pSubresState, (D3D12_RESOURCE_STATES)kv.value.resource_state)) {
+	//				auto before = *pSubresState;
+	//				auto after = GetNextState(list->Queue->Type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state);
+
+	//				D3D12_RESOURCE_BARRIER barrier;
+	//				barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	//				barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	//				barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
+	//				barrier.Transition.Subresource = subresIndex;
+	//				barrier.Transition.StateBefore = before;
+	//				barrier.Transition.StateAfter = after;
+	//				PushBack(patchupBarriers, barrier);
+	//			}
+	//			if (pSubresState) {
+	//				Remove(GSubresourceState, query);
+	//			}
+	//		}
+
+	//		auto before = (D3D12_RESOURCE_STATES)kv.value.resource_state;
+	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state)) {
+	//			auto after = GetNextState(list->Queue->Type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state);
+
+	//			D3D12_RESOURCE_BARRIER barrier;
+	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	//			barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
+	//			barrier.Transition.Subresource = -1;
+	//			barrier.Transition.StateBefore = before;
+	//			barrier.Transition.StateAfter = after;
+	//			PushBack(patchupBarriers, barrier);
+
+	//			GResourceState[kv.key].resource_state = after;
+	//		}
+
+	//		GResourceState[kv.key].per_subresource_tracking = 0;
+	//	}
+	//	else {
+	//		Check(kv.value.per_subresource_tracking == 1);
+
+	//		// subresources were already transitioned
+	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
+	//		if (kv.value.resource_state != RESOURCE_STATE_UNKNOWN && NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state)) {
+	//			auto after = GetNextState(list->Queue->Type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state);
+
+	//			Check(after == (D3D12_RESOURCE_STATES)kv.value.resource_state);
+
+	//			D3D12_RESOURCE_BARRIER barrier;
+	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	//			barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
+	//			barrier.Transition.Subresource = -1;
+	//			barrier.Transition.StateBefore = before;
+	//			barrier.Transition.StateAfter = after;
+	//			PushBack(patchupBarriers, barrier);
+
+	//			GResourceState[kv.key].resource_state = after;
+	//			GResourceState[kv.key].per_subresource_tracking = 0;
+	//		}
+	//	}
+	//}
+
+	// A: we expect whole res in state Y, whole rs in state X
+	// B: we expect whole res in Y, some subres in X
+	// C: we expect subres in Y, whole res in X
+	// D: we expect subres in Y, subres in X
+/*
 	for (auto kv : list->ResourcesStateTracker.ExpectedState) {
 		auto key = kv.key;
 
-		auto state = GResourceStates[kv.key];
+		const auto pCurrent = Get(GResourceState, kv.key);
+		if (kv.value.per_subresource_tracking == 0) {
+			current.per_subresource_tracking
+		}
+
+		auto state = GResourceState[kv.key];
 		auto expectedState = kv.value;
 
 		if (state.state == D3D12_RESOURCE_STATE_RENDER_TARGET && list->Queue->Type == COPY_QUEUE) {
@@ -952,7 +1244,7 @@ void					Execute(GPUCommandList* list) {
 
 	for (auto kv : list->ResourcesStateTracker.ResourceState) {
 		Set(GResourceStates, kv.key, kv.value);
-	}
+	}*/
 
 	Array<ID3D12CommandList*> executionList(GetThreadScratchAllocator());
 
@@ -996,7 +1288,8 @@ void					Execute(GPUCommandList* list) {
 		patchupList->CommandAllocator = nullptr;
 
 		patchupList->Pool->Return(patchupList);
-		Check(Size(patchupList->ResourcesStateTracker.ResourceState) == 0);
+		Check(Size(patchupList->ResourcesStateTracker.ExpectedState) == 0);
+		Check(Size(patchupList->ResourcesStateTracker.ExpectedSubresourceState) == 0);
 	}
 }
 
@@ -1058,34 +1351,132 @@ ResourceTracker::ResourceTracker(GPUCommandList* list) : Owner(list) {
 }
 
 ResourceTracker::~ResourceTracker() {
-	FreeMemory(ResourceState);
+	FreeMemory(CurrentState);
+	FreeMemory(CurrentSubresourceState);
+	FreeMemory(ExpectedState);
+	FreeMemory(ExpectedSubresourceState);
+	FreeMemory(QueuedBarriers);
 }
 
-void ResourceTracker::Transition(resource_slice_t resource, D3D12_RESOURCE_STATES after) {
-	D3D12_RESOURCE_STATES before;
-	auto pState = Get(ResourceState, resource);
-	if (pState) {
-		before = pState->state;
+void ResourceTracker::EnqueueTransition(ID3D12Resource* resource, u32 subresource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+	D3D12_RESOURCE_BARRIER barrier;
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	barrier.Transition.pResource = resource;
+	barrier.Transition.Subresource = subresource;
+	barrier.Transition.StateBefore = before;
+	barrier.Transition.StateAfter = after;
+	PushBack(QueuedBarriers, barrier);
+}
+
+// state exists => expected state exists
+// state is tracked per subresource => expected might tracked per subresource
+// state is tracked per subresource but no entry for subresource => inherit from resource (subres has precedence over resource)
+
+void ResourceTracker::Transition(resource_slice_t slice, D3D12_RESOURCE_STATES desired) {
+	if (slice.subresource == 0) {
+		const auto pState = Get(CurrentState, slice.handle);
+		if (pState && pState->per_subresource_tracking == 0) {
+			Check(pState->resource_state != RESOURCE_STATE_UNKNOWN);
+			auto before = (D3D12_RESOURCE_STATES)pState->resource_state;
+			if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, desired)) {
+				auto after = GetNextState(Owner->Queue->Type, before, desired);
+				EnqueueTransition(GetResourceFast(slice.handle)->resource, slice.subresource - 1, before, after);
+				CurrentState[slice.handle].resource_state = after;
+			}
+		}
+		else if(!pState) {
+			ExpectedState[slice.handle].resource_state = (u32)desired;
+			ExpectedState[slice.handle].per_subresource_tracking = 0;
+
+			CurrentState[slice.handle].resource_state = (u32)desired;
+			CurrentState[slice.handle].per_subresource_tracking = 0;
+		}
+		else {
+			Check(pState && pState->per_subresource_tracking == 1);
+
+			auto subresNum = GetResourceInfo(slice.handle)->subresources_num;
+			auto query = slice;
+
+			auto after = pState->resource_state != RESOURCE_STATE_UNKNOWN 
+				? GetNextState(Owner->Queue->Type, (D3D12_RESOURCE_STATES)pState->resource_state, desired)
+				: desired;
+
+			for (auto subresIndex : MakeRange(subresNum)) {
+				query.subresource = subresIndex + 1;
+				const auto pSubresState = Get(CurrentSubresourceState, query);
+				if (pSubresState) {
+					auto before = (D3D12_RESOURCE_STATES)*pSubresState;
+					if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, after)) {
+						EnqueueTransition(GetResourceFast(slice.handle)->resource, subresIndex, before, after);
+					}
+					// we go to one state per res, drop rest
+					Remove(CurrentSubresourceState, query);
+				}
+			}
+
+			if (pState->resource_state != RESOURCE_STATE_UNKNOWN && pState->resource_state != after) {
+				EnqueueTransition(GetResourceFast(slice.handle)->resource, -1, (D3D12_RESOURCE_STATES)pState->resource_state, after);
+			}
+			else {
+				// expect resource to be in after state
+				ExpectedState[slice.handle].resource_state = (u32)after;
+			}
+			CurrentState[slice.handle].resource_state = after;
+			CurrentState[slice.handle].per_subresource_tracking = 0;
+		}
 	}
 	else {
-		before = GetResourceTransitionInfo(resource.handle)->default_state;
-	}
+		Check(slice.subresource != 0);
 
-	if (!Contains(ExpectedState, resource)) {
-		ExpectedState[resource].state = before;
-	}
-	ResourceState[resource].state = after;
+		const auto pResState = Get(CurrentState, slice.handle);
+		const auto pSubresState = Get(CurrentSubresourceState, slice);
+		if (pSubresState) {
+			Check(*pSubresState != RESOURCE_STATE_UNKNOWN);
 
-	if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(resource.handle)->heap_type, before, after)) {
-		D3D12_RESOURCE_BARRIER barrier;
-		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		barrier.Transition.pResource = GetResourceFast(resource.handle)->resource;
-		barrier.Transition.Subresource = resource.subresource - 1;
-		barrier.Transition.StateBefore = before;
-		barrier.Transition.StateAfter = GetNextState(Owner->Queue->Type, before, after);
-
-		PushBack(QueuedBarriers, barrier);
+			auto before = (D3D12_RESOURCE_STATES)*pSubresState;
+			if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, desired)) {
+				auto after = GetNextState(Owner->Queue->Type, before, desired);
+				EnqueueTransition(GetResourceFast(slice.handle)->resource, slice.subresource - 1, before, after);
+				Set(CurrentSubresourceState, slice, (u32)after);
+			}
+		}
+		else if (pResState && pResState->per_subresource_tracking == 1) {
+			if (pResState->resource_state == RESOURCE_STATE_UNKNOWN) {
+				Set(ExpectedSubresourceState, slice, (u32)desired);
+				Set(CurrentSubresourceState, slice, (u32)desired);
+			}
+			else {
+				Check(pResState->resource_state != RESOURCE_STATE_UNKNOWN);
+				auto before = (D3D12_RESOURCE_STATES)pResState->resource_state;
+				if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, desired)) {
+					auto after = GetNextState(Owner->Queue->Type, before, desired);
+					EnqueueTransition(GetResourceFast(slice.handle)->resource, slice.subresource - 1, before, after);
+					Set(CurrentSubresourceState, slice, (u32)after);
+				}
+			}
+		}
+		else if (pResState && pResState->per_subresource_tracking == 0 && pResState->resource_state != RESOURCE_STATE_UNKNOWN) {
+			auto before = (D3D12_RESOURCE_STATES)pResState->resource_state;
+			if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, desired)) {
+				auto after = GetNextState(Owner->Queue->Type, before, desired);
+				EnqueueTransition(GetResourceFast(slice.handle)->resource, slice.subresource - 1, before, after);
+				Set(CurrentSubresourceState, slice, (u32) after);
+				Get(CurrentState, slice.handle)->per_subresource_tracking = 1;
+			}
+		}
+		else if (!pResState) {
+			Set(CurrentSubresourceState, slice, (u32)desired);
+			Set(ExpectedSubresourceState, slice, (u32)desired);
+			resource_tracking_state tracking = {};
+			tracking.per_subresource_tracking = 1;
+			tracking.resource_state = RESOURCE_STATE_UNKNOWN;
+			Set(CurrentState, slice.handle, tracking);
+			Set(ExpectedState, slice.handle, tracking);
+		}
+		else {
+			Check(0);
+		}
 	}
 }
 
@@ -1097,7 +1488,8 @@ void ResourceTracker::FireBarriers() {
 }
 
 void	 RegisterResource(resource_handle resource, D3D12_RESOURCE_STATES initialState) {
-	GResourceStates[Slice(resource)].state = initialState;
+	GResourceState[resource].resource_state = (u32)initialState;
+	GResourceState[resource].per_subresource_tracking = 0;
 }
 
 void CopyResource(GPUCommandList* list, resource_handle dst, resource_handle src) {
@@ -2456,7 +2848,8 @@ void ShutdownRenderingEngines() {
 		_delete(ptr);
 	}
 	FreeMemory(GPUQueues);
-	FreeMemory(GResourceStates);
+	FreeMemory(GResourceState);
+	FreeMemory(GSubresourceState);
 }
 
 }

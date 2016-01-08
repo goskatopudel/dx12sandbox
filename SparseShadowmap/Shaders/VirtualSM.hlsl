@@ -34,17 +34,3 @@ void PreparePages( uint3 DTid : SV_DispatchThreadID )
 	uint old_level;
 	InterlockedMax(PagesTexture[page], (uint)level, old_level);
 }
-
-
-// Texture2D<uint> 	LowerLevel : register( t0 );
-// RWTexture2D<uint>	CurrentLevel : register( u0 );
-
-// [numthreads( 8, 8, 1 )]
-// void BuildMips( uint3 DTid : SV_DispatchThreadID ) 
-// {
-// 	uint A = LowerLevel[DTid*2];
-// 	uint B = LowerLevel[DTid*2 + uint2(1,0)];
-// 	uint C = LowerLevel[DTid*2 + uint2(1,1)];
-// 	uint D = LowerLevel[DTid*2 + uint2(0,1)];
-// 	CurrentLevel[DTid] = max(max(A,B),max(C,D));
-// }

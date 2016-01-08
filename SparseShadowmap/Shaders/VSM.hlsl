@@ -44,6 +44,6 @@ SamplerState    	Sampler : register(s0);
 float4 CopyUintPS(float4 position : SV_POSITION, float2 texcoord : TEXCOORD) : SV_TARGET
 {
 	uint val = Image[texcoord * 128].r;
-	//if(val == 0) discard;
+	if(val == 0) discard;
 	return val.rrrr / 32.f;
 }

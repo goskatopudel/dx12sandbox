@@ -33,6 +33,8 @@ struct buffer_location_t {
 	u32 size;
 };
 
+const u32 PER_SUBRESOURCE_STATE_TRACKING = 0xFFFFFFFF;
+
 struct resource_slice_t {
 	resource_handle		handle;
 	u32					subresource; // -> 0 = all, 1 = 0, etc (shift by 1 from api)

@@ -42,7 +42,7 @@ void CreateScreenResources() {
 	auto x = GDisplaySettings.resolution.x;
 	auto y = GDisplaySettings.resolution.y;
 
-	SceneColor = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM, ALLOW_RENDER_TARGET, "scene_color");
+	SceneColor = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM, ALLOW_RENDER_TARGET, "scene_color", float4(0.1f, 0.1f, 0.1f, 1.f));
 	ShadowLOD = CreateTexture(x, y, DXGI_FORMAT_R8_UINT, ALLOW_RENDER_TARGET, "shadow_lod");
 	DepthBuffer = CreateTexture(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth");
 }
@@ -135,7 +135,7 @@ void Tick(float fDeltaTime) {
 	using namespace DirectX;
 
 	ClearRenderTarget(depthCL, GetRTV(ShadowLOD));
-	ClearRenderTarget(depthCL, GetRTV(SceneColor));
+	ClearRenderTarget(depthCL, GetRTV(SceneColor), float4(0.1f, 0.1f, 0.1f, 1.f));
 	ClearDepthStencil(depthCL, GetDSV(DepthBuffer));
 	ClearDepthStencil(depthCL, GetDSV(LowResSM));
 	ClearUnorderedAccess(depthCL, GetUAV(PagesNeeded));
@@ -225,6 +225,20 @@ void Tick(float fDeltaTime) {
 	SetConstant(depthCL, TEXT_("Resolution"), float2((float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y));
 	Dispatch(depthCL, (GDisplaySettings.resolution.x + 7) / 8, (GDisplaySettings.resolution.y + 7) / 8, 1);
 
+	u32 subresource = 0;
+	for (u32 size = 128; size > 1; size >>= 1) {
+		u32 target = size / 2;
+		SetComputeShaderState(depthCL, SHADER_(Mipmap, BuildMinMip, CS_5_1));
+
+		SetTexture2D(depthCL, TEXT_("LowerLevel"), GetSRV(PagesNeeded, subresource));
+		SetRWTexture2D(depthCL, TEXT_("CurrentLevel"), GetUAV(PagesNeeded, subresource+1));
+		Dispatch(depthCL, (target + 7) / 8, (target + 7) / 8, 1);
+		subresource++;
+
+		Execute(depthCL);
+		depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
+	}
+
 	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, CopyPS, PS_5_1), {});
 	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
 	SetDepthStencil(depthCL, {});
@@ -239,6 +253,27 @@ void Tick(float fDeltaTime) {
 	SetViewport(depthCL, 128.f, 128.f, 128.f + 1.f + 10.f, 1.f);
 	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded));
+	Draw(depthCL, 3);
+	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
+	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
+	SetDepthStencil(depthCL, {});
+	SetViewport(depthCL, 64.f, 64.f, 128.f + 1.f + 10.f + 1.f + 128.f, 1.f);
+	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded, 1));
+	Draw(depthCL, 3);
+	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
+	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
+	SetDepthStencil(depthCL, {});
+	SetViewport(depthCL, 32.f, 32.f, 128.f + 1.f + 10.f + 1.f + 128.f + 64.f, 1.f);
+	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded, 2));
+	Draw(depthCL, 3);
+	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
+	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
+	SetDepthStencil(depthCL, {});
+	SetViewport(depthCL, 16.f, 16.f, 128.f + 1.f + 10.f + 1.f + 128.f + 64.f + 32.f, 1.f);
+	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded, 3));
 	Draw(depthCL, 3);
 
 	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, LinearizeDepthPS, PS_5_1), {});
