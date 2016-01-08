@@ -1413,10 +1413,16 @@ void ResourceTracker::Transition(resource_slice_t slice, D3D12_RESOURCE_STATES d
 					// we go to one state per res, drop rest
 					Remove(CurrentSubresourceState, query);
 				}
+				else if(pState->resource_state != RESOURCE_STATE_UNKNOWN){
+					auto before = (D3D12_RESOURCE_STATES)pState->resource_state;
+					if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, after, true)) {
+						EnqueueTransition(GetResourceFast(slice.handle)->resource, subresIndex, before, after);
+					}
+				}
 			}
 
-			if (pState->resource_state != RESOURCE_STATE_UNKNOWN && pState->resource_state != after) {
-				EnqueueTransition(GetResourceFast(slice.handle)->resource, -1, (D3D12_RESOURCE_STATES)pState->resource_state, after);
+			if (pState->resource_state != RESOURCE_STATE_UNKNOWN && NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, (D3D12_RESOURCE_STATES)pState->resource_state, after, true)) {
+				//EnqueueTransition(GetResourceFast(slice.handle)->resource, -1, (D3D12_RESOURCE_STATES)pState->resource_state, after);
 			}
 			else {
 				// expect resource to be in after state

@@ -47,6 +47,155 @@ void CreateScreenResources() {
 	DepthBuffer = CreateTexture(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth");
 }
 
+#include "Ringbuffer.h"
+#include "d3dx12.h"
+
+struct page_t {
+	u32 index;
+};
+
+class PagePool {
+public:
+	struct page_heap_t {
+		ID3D12Heap*	D12Heap;
+	};
+
+	u32					PagesPerHeap;
+	static const u32	D12PageSize = 65536;
+
+	Array<page_heap_t>	Heaps;
+	Ringbuffer<page_t>	FreePages;
+
+	PagePool() {
+		PagesPerHeap = 128;
+	}
+
+	void FreeMemory() {
+		for (auto heap : Heaps) {
+			ComRelease(heap.D12Heap);
+		}
+		::FreeMemory(Heaps);
+		::FreeMemory(FreePages);
+	}
+
+	~PagePool() {
+		FreeMemory();
+	}
+
+	void AddPages() {
+		page_heap_t heap = {};
+
+		D3D12_HEAP_DESC heapDesc = {};
+		heapDesc.Alignment = 0;
+		heapDesc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES;
+		heapDesc.SizeInBytes = PagesPerHeap * D12PageSize;
+		heapDesc.Properties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+
+		VerifyHr(GD12Device->CreateHeap(&heapDesc, IID_PPV_ARGS(&heap.D12Heap)));
+
+		u32 heapIndex = (u32)Size(Heaps);
+		PushBack(Heaps, heap);
+
+		for (auto i : u32Range(PagesPerHeap)) {
+			page_t page;
+			page.index = heapIndex * PagesPerHeap + i;
+			PushBack(FreePages, page);
+		}
+	}
+
+	void Allocate(Array<page_t>& pagesList, u32 num) {
+		while (Size(pagesList) < num) {
+			if (!Size(FreePages)) {
+				AddPages();
+			}
+			PushBack(pagesList, Front(FreePages));
+			PopFront(FreePages);
+		}
+	}
+
+	void Free(Array<page_t>const& pagesList) {
+
+	}
+	
+	ID3D12Heap* GetPageHeap(page_t page) {
+		return Heaps[page.index / PagesPerHeap].D12Heap;
+	}
+
+	u32 GetPageHeapOffset(page_t page) {
+		return page.index % PagesPerHeap;
+	}
+};
+
+void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQueue* queue) {
+
+	u32 numTiles;
+	D3D12_PACKED_MIP_INFO packedMipDesc;
+	D3D12_TILE_SHAPE tileShape;
+
+	u32 numSubresTilings = GetResourceInfo(resource)->subresources_num;
+	//
+	Array<D3D12_SUBRESOURCE_TILING> subresTilings(GetThreadScratchAllocator());
+	Resize(subresTilings, numSubresTilings);
+	GD12Device->GetResourceTiling(GetResourceInfo(resource)->resource, &numTiles, &packedMipDesc, &tileShape, &numSubresTilings, 0, subresTilings.DataPtr);
+
+	Array<page_t> pages(GetThreadScratchAllocator());
+	pagePool->Allocate(pages, packedMipDesc.NumTilesForPackedMips);
+
+	D3D12_TILED_RESOURCE_COORDINATE coordinate = {};
+	coordinate.Subresource = packedMipDesc.NumStandardMips;
+
+	D3D12_TILE_REGION_SIZE region = {};
+	region.UseBox = false;
+	region.NumTiles = 1;
+	region.Width = 1;
+	D3D12_TILE_RANGE_FLAGS flag = D3D12_TILE_RANGE_FLAG_NONE;
+
+	u32 heapOffset = pagePool->GetPageHeapOffset(pages[0]);
+	u32 rangeCount = 1;
+
+	// allocate mip tail
+	GetD12Queue(queue)->UpdateTileMappings(
+		GetResourceInfo(resource)->resource,
+		1,
+		&coordinate,
+		&region,
+		pagePool->GetPageHeap(pages[0]),
+		1,
+		&flag,
+		&heapOffset,
+		&rangeCount,
+		D3D12_TILE_MAPPING_FLAG_NONE);
+
+	// allocate rest with dummy page
+	Clear(pages);
+	pagePool->Allocate(pages, 1);
+
+	heapOffset = pagePool->GetPageHeapOffset(pages[0]);
+	rangeCount = 1;
+
+	coordinate = {};
+	coordinate.Subresource = 0;
+
+	region.UseBox = false;
+	region.NumTiles = packedMipDesc.NumStandardMips;
+
+	flag = D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE;
+
+	GetD12Queue(queue)->UpdateTileMappings(
+		GetResourceInfo(resource)->resource,
+		1,
+		&coordinate,
+		&region,
+		pagePool->GetPageHeap(pages[0]),
+		1,
+		&flag,
+		&heapOffset,
+		&rangeCount,
+		D3D12_TILE_MAPPING_FLAG_NONE);
+}
+
+PagePool Pages;
+
 void Init() {
 	SpawnEntity(testScene, GetModel(NAME_("models/sibenik.obj")));
 	/*auto hairball = SpawnEntity(testScene, GetModel(NAME_("models/hairball.obj")));
@@ -56,6 +205,8 @@ void Init() {
 	LowResSM = CreateTexture(128, 128, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL, "low_res_sm");
 	VirtualSM = CreateTexture(16384, 16384, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL | TEX_MIPMAPPED | TEX_VIRTUAL, "virtual_sm");
 	PagesNeeded = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, ALLOW_UNORDERED_ACCESS | TEX_MIPMAPPED, "vsm_pages");
+
+	MapMipTailAndDummyPage(VirtualSM, &Pages, GGPUMainQueue);
 }
 
 void Tick(float fDeltaTime) {
@@ -153,6 +304,10 @@ void Tick(float fDeltaTime) {
 	shadowmapMatrix = XMMatrixLookAtLH(lightDirection * 200, XMVectorZero(), XMVectorSet(0,1,0,1)) * XMMatrixOrthographicLH(64, 64, 1.f, 400);
 	shadowmapMatrix = XMMatrixTranspose(shadowmapMatrix);
 
+	for (auto subres : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
+		ClearDepthStencil(depthCL, GetDSV(VirtualSM, subres));
+	}
+
 	for (auto entity : testScene.Entities) {
 
 		auto worldMatrix = XMMatrixTranspose(
@@ -235,8 +390,8 @@ void Tick(float fDeltaTime) {
 		Dispatch(depthCL, (target + 7) / 8, (target + 7) / 8, 1);
 		subresource++;
 
-		Execute(depthCL);
-		depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
+		/*Execute(depthCL);
+		depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));*/
 	}
 
 	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, CopyPS, PS_5_1), {});
@@ -246,6 +401,9 @@ void Tick(float fDeltaTime) {
 	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(SceneColor));
 	Draw(depthCL, 3);
+
+	//Execute(depthCL);
+	//depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
 
 	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
 	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
@@ -299,6 +457,8 @@ void Shutdown() {
 	WaitForCompletion();
 
 	call_destructor(testScene);
+
+	Pages.FreeMemory();
 }
 
 int main(int argc, char * argv[]) {

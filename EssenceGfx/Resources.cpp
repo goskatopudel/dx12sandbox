@@ -203,7 +203,18 @@ resource_dsv_t			GetDSV(resource_handle resource) {
 	return dsv;
 }
 
-resource_dsv_t			GetDSV(resource_handle resource, u32 mipmap);
+resource_dsv_t			GetDSV(resource_handle resource, u32 mipmap) {
+	resource_dsv_t dsv = {};
+
+	if (IsValid(resource)) {
+		dsv.slice = Slice(resource);
+		dsv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].dsv_locations);
+		dsv.format = GetDepthStencilFormat(ResourcesTable[resource].desc.Format);
+		dsv.has_stencil = ResourcesViews[resource.GetIndex()].dsv_locations.size == DSV_ACCESS_COUNT;
+	}
+
+	return dsv;
+}
 
 resource_uav_t			GetUAV(resource_handle resource) {
 	resource_uav_t uav = {};
@@ -413,19 +424,6 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 		handle = CreateCommittedResource(&desc, DEFAULT_MEMORY, debugName, needsClearValue ? &clearValue : nullptr, D3D12_RESOURCE_STATE_COMMON);
 	}
 
-	//if (textureFlags & TEX_VIRTUAL) {
-	//	//u32 numTiles;
-	//	//D3D12_PACKED_MIP_INFO packedMipDesc;
-	//	//D3D12_TILE_SHAPE tileShape;
-	//	//u32 numSubresTilings = ResourcesTable[handle].subresources_num;
-	//	////
-	//	//D3D12_SUBRESOURCE_TILING subresTilings[32];
-	//	//GD12Device->GetResourceTiling(ResourcesTable[handle].resource, &numTiles, &packedMipDesc, &tileShape, &numSubresTilings, 0, subresTilings);
-
-	//	//int y = 7;
-	//	//int z = y;
-	//}
-
 	bool readOnly = (textureFlags & (ALLOW_DEPTH_STENCIL | ALLOW_RENDER_TARGET | ALLOW_UNORDERED_ACCESS)) == 0;
 	u32 subresourcesNum = GetResourceInfo(handle)->subresources_num;
 
@@ -451,7 +449,6 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 				GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, subIndex + 1));
 			}
 		}
-
 
 		GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations));
 
