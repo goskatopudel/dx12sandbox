@@ -59,7 +59,7 @@ enum ClearDepthFlagEnum {
 	CLEAR_STENCIL = 2,
 	CLEAR_ALL = 3 
 };
-void						ClearDepthStencil(GPUCommandList*, resource_dsv_t, ClearDepthFlagEnum flags = CLEAR_ALL, float depth = 1.f, u8 stencil = 0);
+void						ClearDepthStencil(GPUCommandList*, resource_dsv_t, ClearDepthFlagEnum flags = CLEAR_ALL, float depth = 1.f, u8 stencil = 0, u32 numRects = 0, D3D12_RECT* rects = nullptr);
 void						ClearUnorderedAccess(GPUCommandList*, resource_uav_t);
 void						SetShaderState	(GPUCommandList*, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory);
 void						SetComputeShaderState(GPUCommandList*, shader_handle cs);

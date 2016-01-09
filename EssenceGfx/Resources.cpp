@@ -208,9 +208,9 @@ resource_dsv_t			GetDSV(resource_handle resource, u32 mipmap) {
 
 	if (IsValid(resource)) {
 		dsv.slice = Slice(resource);
-		dsv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].dsv_locations);
-		dsv.format = GetDepthStencilFormat(ResourcesTable[resource].desc.Format);
 		dsv.has_stencil = ResourcesViews[resource.GetIndex()].dsv_locations.size == DSV_ACCESS_COUNT;
+		dsv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].dsv_locations, CalcSubresource(resource, mipmap) * (dsv.has_stencil ? DSV_ACCESS_COUNT : DSV_NO_STENCIL_ACCESS_COUNT));
+		dsv.format = GetDepthStencilFormat(ResourcesTable[resource].desc.Format);
 	}
 
 	return dsv;
@@ -232,7 +232,7 @@ resource_uav_t			GetUAV(resource_handle resource, u32 mipmap) {
 
 	if (IsValid(resource)) {
 		uav.slice = Slice(resource, CalcSubresource(resource, mipmap) + 1);
-		uav.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].uav_locations, CalcSubresource(resource, mipmap) + 1);
+		uav.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].uav_locations, CalcSubresource(resource, mipmap));
 	}
 
 	return uav;
@@ -259,7 +259,7 @@ resource_srv_t			GetSRV(resource_handle resource, u32 mipmap) {
 
 	if (IsValid(resource)) {
 		srv.slice = Slice(resource, CalcSubresource(resource, mipmap) + 1);
-		srv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].srv_locations, CalcSubresource(resource, mipmap) + 1);
+		srv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].srv_locations, CalcSubresource(resource, mipmap));
 		srv.fixed_state = GetResourceFast(resource)->is_read_only;
 
 		if (!srv.fixed_state) {
@@ -489,7 +489,7 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 			ResourcesViews[handle.GetIndex()].rtv_locations = RTVDescHeap.Allocate(1);
 		}
 		else {
-			ResourcesViews[handle.GetIndex()].rtv_locations = RTVDescHeap.Allocate(1 + subresourcesNum);
+			ResourcesViews[handle.GetIndex()].rtv_locations = RTVDescHeap.Allocate(subresourcesNum);
 
 			for (auto subIndex : MakeRange(subresourcesNum)) {
 				D3D12_RENDER_TARGET_VIEW_DESC rtvView = {};
@@ -498,7 +498,7 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 				rtvView.Texture2D.MipSlice = subIndex;
 				rtvView.Texture2D.PlaneSlice = 0;
 
-				GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, &rtvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations, subIndex + 1));
+				GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, &rtvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations, subIndex));
 			}
 		}
 		GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations));
@@ -508,7 +508,7 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 			ResourcesViews[handle.GetIndex()].uav_locations = ViewDescHeap.Allocate(1);
 		}
 		else {
-			ResourcesViews[handle.GetIndex()].uav_locations = ViewDescHeap.Allocate(1 + subresourcesNum);
+			ResourcesViews[handle.GetIndex()].uav_locations = ViewDescHeap.Allocate(subresourcesNum);
 
 			for (auto subIndex : MakeRange(subresourcesNum)) {
 				D3D12_UNORDERED_ACCESS_VIEW_DESC uavView = {};
@@ -517,7 +517,7 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 				uavView.Texture2D.MipSlice = subIndex;
 				uavView.Texture2D.PlaneSlice = 0;
 
-				GD12Device->CreateUnorderedAccessView(ResourcesTable[handle].resource, nullptr, &uavView, ToCPUHandle(ResourcesViews[handle.GetIndex()].uav_locations, subIndex + 1));
+				GD12Device->CreateUnorderedAccessView(ResourcesTable[handle].resource, nullptr, &uavView, ToCPUHandle(ResourcesViews[handle.GetIndex()].uav_locations, subIndex));
 			}
 		}
 
@@ -527,8 +527,40 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 		Check(GetDepthStencilFormat(format) != DXGI_FORMAT_UNKNOWN);
 
 		bool hasStencil = GetStencilReadFormat(format) != DXGI_FORMAT_UNKNOWN;
-		ResourcesViews[handle.GetIndex()].dsv_locations = DSVDescHeap.Allocate(hasStencil ? DSV_ACCESS_COUNT : DSV_NO_STENCIL_ACCESS_COUNT);
-		
+
+		if (!(textureFlags & TEX_MIPMAPPED)) {
+			ResourcesViews[handle.GetIndex()].dsv_locations = DSVDescHeap.Allocate(hasStencil ? DSV_ACCESS_COUNT : DSV_NO_STENCIL_ACCESS_COUNT);
+		}
+		else {
+			ResourcesViews[handle.GetIndex()].dsv_locations = DSVDescHeap.Allocate((hasStencil ? DSV_ACCESS_COUNT : DSV_NO_STENCIL_ACCESS_COUNT) * (subresourcesNum));
+
+			for (auto subIndex : MakeRange(1u, subresourcesNum)) {
+				auto offset = (hasStencil ? DSV_ACCESS_COUNT : DSV_NO_STENCIL_ACCESS_COUNT) * subIndex;
+
+				D3D12_DEPTH_STENCIL_VIEW_DESC dsvView = {};
+				dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+				dsvView.Texture2D.MipSlice = subIndex;
+
+				dsvView.Flags = D3D12_DSV_FLAG_NONE;
+				dsvView.Format = GetDepthStencilFormat(format);
+				GD12Device->CreateDepthStencilView(ResourcesTable[handle].resource, &dsvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].dsv_locations, offset + DSV_WRITE_ALL));
+
+				dsvView.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+				dsvView.Format = GetDepthStencilFormat(format);
+				GD12Device->CreateDepthStencilView(ResourcesTable[handle].resource, &dsvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].dsv_locations, offset + DSV_READ_ONLY_DEPTH));
+
+				if (hasStencil) {
+					dsvView.Flags = D3D12_DSV_FLAG_READ_ONLY_STENCIL;
+					dsvView.Format = GetDepthStencilFormat(format);
+					GD12Device->CreateDepthStencilView(ResourcesTable[handle].resource, &dsvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].dsv_locations, offset + DSV_READ_ONLY_STENCIL));
+
+					dsvView.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH | D3D12_DSV_FLAG_READ_ONLY_STENCIL;
+					dsvView.Format = GetDepthStencilFormat(format);
+					GD12Device->CreateDepthStencilView(ResourcesTable[handle].resource, &dsvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].dsv_locations, offset + DSV_READ_ONLY));
+				}
+			}
+		}
+
 		D3D12_DEPTH_STENCIL_VIEW_DESC dsvView = {};
 		dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
 		dsvView.Texture2D.MipSlice = 0;

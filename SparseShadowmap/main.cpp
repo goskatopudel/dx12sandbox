@@ -151,7 +151,7 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 	D3D12_TILE_RANGE_FLAGS flag = D3D12_TILE_RANGE_FLAG_NONE;
 
 	u32 heapOffset = pagePool->GetPageHeapOffset(pages[0]);
-	u32 rangeCount = 1;
+	u32 rangeTiles = 1;
 
 	// allocate mip tail
 	GetD12Queue(queue)->UpdateTileMappings(
@@ -163,7 +163,7 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 		1,
 		&flag,
 		&heapOffset,
-		&rangeCount,
+		&rangeTiles,
 		D3D12_TILE_MAPPING_FLAG_NONE);
 
 	// allocate rest with dummy page
@@ -171,15 +171,15 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 	pagePool->Allocate(pages, 1);
 
 	heapOffset = pagePool->GetPageHeapOffset(pages[0]);
-	rangeCount = 1;
 
 	coordinate = {};
 	coordinate.Subresource = 0;
 
 	region.UseBox = false;
-	region.NumTiles = packedMipDesc.NumStandardMips;
+	region.NumTiles = numTiles - packedMipDesc.NumTilesForPackedMips;
 
 	flag = D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE;
+	rangeTiles = 1;
 
 	GetD12Queue(queue)->UpdateTileMappings(
 		GetResourceInfo(resource)->resource,
@@ -190,7 +190,7 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 		1,
 		&flag,
 		&heapOffset,
-		&rangeCount,
+		&rangeTiles,
 		D3D12_TILE_MAPPING_FLAG_NONE);
 }
 
@@ -304,9 +304,17 @@ void Tick(float fDeltaTime) {
 	shadowmapMatrix = XMMatrixLookAtLH(lightDirection * 200, XMVectorZero(), XMVectorSet(0,1,0,1)) * XMMatrixOrthographicLH(64, 64, 1.f, 400);
 	shadowmapMatrix = XMMatrixTranspose(shadowmapMatrix);
 
-	for (auto subres : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
+	/*for (auto subres : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
 		ClearDepthStencil(depthCL, GetDSV(VirtualSM, subres));
-	}
+	}*/
+
+	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 11));
+	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 8));
+
+	D3D12_RECT rect;
+	rect.left = rect.top = 0;
+	rect.right = rect.bottom = 128;
+	//ClearDepthStencil(depthCL, GetDSV(VirtualSM, 7), CLEAR_ALL, 1, 0, 1, &rect);
 
 	for (auto entity : testScene.Entities) {
 

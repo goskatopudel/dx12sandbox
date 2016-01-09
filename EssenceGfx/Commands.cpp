@@ -1525,14 +1525,14 @@ void ClearUnorderedAccess(GPUCommandList* list, resource_uav_t uav) {
 	list->D12CommandList->ClearUnorderedAccessViewUint(GetGPUHandle(viewAlloc), uav.cpu_descriptor, GetResourceFast(uav.slice.handle)->resource, values, 0, nullptr);
 }
 
-void ClearDepthStencil(GPUCommandList* list, resource_dsv_t dsv, ClearDepthFlagEnum flags, float depth, u8 stencil) {
+void ClearDepthStencil(GPUCommandList* list, resource_dsv_t dsv, ClearDepthFlagEnum flags, float depth, u8 stencil, u32 numRects, D3D12_RECT* rects) {
 	list->ResourcesStateTracker.Transition(dsv.slice, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 	list->ResourcesStateTracker.FireBarriers();
 
 	auto access = DSV_WRITE_ALL;
 	access = (flags == CLEAR_STENCIL) ? DSV_READ_ONLY_DEPTH : access;
 	access = (flags == CLEAR_DEPTH) ? DSV_READ_ONLY_STENCIL : access;
-	list->D12CommandList->ClearDepthStencilView(dsv.cpu_descriptor, (D3D12_CLEAR_FLAGS)flags, depth, stencil, 0, nullptr);
+	list->D12CommandList->ClearDepthStencilView(dsv.cpu_descriptor, (D3D12_CLEAR_FLAGS)flags, depth, stencil, numRects, rects);
 }
 
 void QueueWait(GPUQueue* queue, GPUFenceHandle handle) {
