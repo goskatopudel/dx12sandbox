@@ -175,8 +175,14 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 	coordinate = {};
 	coordinate.Subresource = 0;
 
+	region = {};/*
 	region.UseBox = false;
-	region.NumTiles = numTiles - packedMipDesc.NumTilesForPackedMips;
+	region.NumTiles = numTiles - packedMipDesc.NumTilesForPackedMips;*/
+	region.UseBox = true;
+	region.NumTiles = 1;
+	region.Width = 1;
+	region.Height = 1;
+	region.Depth = 1;
 
 	flag = D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE;
 	rangeTiles = 1;
@@ -308,13 +314,14 @@ void Tick(float fDeltaTime) {
 		ClearDepthStencil(depthCL, GetDSV(VirtualSM, subres));
 	}*/
 
-	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 11));
-	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 8));
+	for (auto i : MakeRange(8u, 15u)) {
+		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i));
+	}
 
-	D3D12_RECT rect;
+	D3D12_RECT rect = {};
 	rect.left = rect.top = 0;
-	rect.right = rect.bottom = 128;
-	//ClearDepthStencil(depthCL, GetDSV(VirtualSM, 7), CLEAR_ALL, 1, 0, 1, &rect);
+	rect.right = rect.bottom = 1;
+	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 0), CLEAR_DEPTH, 1, 0, 1, &rect);
 
 	for (auto entity : testScene.Entities) {
 
@@ -361,17 +368,21 @@ void Tick(float fDeltaTime) {
 
 			//
 
-			SetShaderState(depthCL, SHADER_(Model, VShader, VS_5_1), {}, renderData->vertex_layout);
 			SetRenderTarget(depthCL, 0, {});
 			SetRenderTarget(depthCL, 1, {});
-			SetViewport(depthCL, (float)128, (float)128);
 
-			SetDepthStencil(depthCL, GetDSV(LowResSM));
+			u32 viewportSize = (u32)GetResourceInfo(VirtualSM)->width;
+			for (auto i : MakeRange(8u, 15u)) {
+				SetShaderState(depthCL, SHADER_(Model, VShader, VS_5_1), {}, renderData->vertex_layout);
+				SetViewport(depthCL, (float)(viewportSize >> i), (float)(viewportSize >> i));
 
-			SetConstant(depthCL, TEXT_("World"), worldMatrix);
-			SetConstant(depthCL, TEXT_("ViewProj"), shadowmapMatrix);
+				SetDepthStencil(depthCL, GetDSV(VirtualSM, i));
 
-			DrawIndexed(depthCL, submesh.index_count, submesh.start_index, submesh.base_vertex);
+				SetConstant(depthCL, TEXT_("World"), worldMatrix);
+				SetConstant(depthCL, TEXT_("ViewProj"), shadowmapMatrix);
+
+				DrawIndexed(depthCL, submesh.index_count, submesh.start_index, submesh.base_vertex);
+			}
 		}
 	}
 
@@ -447,7 +458,17 @@ void Tick(float fDeltaTime) {
 	SetDepthStencil(depthCL, {});
 	SetViewport(depthCL, (float)128, (float)128, 1, 1);
 	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(LowResSM));
+	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(VirtualSM, 8));
+	SetConstant(depthCL, TEXT_("Projection_33"), XMVectorGetZ(shadowmapMatrix.r[2]));
+	SetConstant(depthCL, TEXT_("Projection_43"), XMVectorGetW(shadowmapMatrix.r[2]));
+	Draw(depthCL, 3);
+
+	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, LinearizeDepthPS, PS_5_1), {});
+	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
+	SetDepthStencil(depthCL, {});
+	SetViewport(depthCL, (float)64, (float)64, 1, 1 + 128.f);
+	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(VirtualSM, 9));
 	SetConstant(depthCL, TEXT_("Projection_33"), XMVectorGetZ(shadowmapMatrix.r[2]));
 	SetConstant(depthCL, TEXT_("Projection_43"), XMVectorGetW(shadowmapMatrix.r[2]));
 	Draw(depthCL, 3);

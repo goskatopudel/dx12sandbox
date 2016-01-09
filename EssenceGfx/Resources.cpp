@@ -18,6 +18,7 @@ struct resource_bind_t {
 	descriptor_allocation_t		rtv_locations;
 	descriptor_allocation_t		dsv_locations;
 	descriptor_allocation_t		uav_locations;
+	u32							has_stencil_views : 1;
 };
 
 DXGI_FORMAT GetDepthStencilFormat(DXGI_FORMAT format) {
@@ -259,12 +260,16 @@ resource_srv_t			GetSRV(resource_handle resource, u32 mipmap) {
 
 	if (IsValid(resource)) {
 		srv.slice = Slice(resource, CalcSubresource(resource, mipmap) + 1);
-		srv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].srv_locations, CalcSubresource(resource, mipmap));
 		srv.fixed_state = GetResourceFast(resource)->is_read_only;
 
+		bool has_depth_views = ResourcesViews[resource.GetIndex()].dsv_locations.size > 0;
+		bool has_stencil_views = ResourcesViews[resource.GetIndex()].has_stencil_views;
 		if (!srv.fixed_state) {
 			srv.is_depth = ResourcesViews[resource.GetIndex()].dsv_locations.size;
 		}
+
+		srv.cpu_descriptor = ToCPUHandle(ResourcesViews[resource.GetIndex()].srv_locations, 
+			(1 + CalcSubresource(resource, mipmap)) * (has_stencil_views ? 2 : 1));
 	}
 
 	return srv;
@@ -446,7 +451,7 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 				srvDesc.Texture2D.PlaneSlice = 0;
 				srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
-				GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, subIndex + 1));
+				GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, subIndex + 1));
 			}
 		}
 
@@ -461,24 +466,45 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 		};
 
 		bool hasStencil = GetStencilReadFormat(format) != DXGI_FORMAT_UNKNOWN;
+		bool mipmapped = (textureFlags & TEX_MIPMAPPED) > 0;
 
-		ResourcesViews[handle.GetIndex()].srv_locations = ViewDescHeap.Allocate(hasStencil ? 2 : 1);
+		u32 viewsPerSubresource = hasStencil ? 2 : 1;
+
+		ResourcesViews[handle.GetIndex()].srv_locations = ViewDescHeap.Allocate(viewsPerSubresource * (subresourcesNum + 1));
+		ResourcesViews[handle.GetIndex()].has_stencil_views = hasStencil;
 
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 		srvDesc.Format = GetDepthReadFormat(format);
-		srvDesc.Texture2D.MipLevels = 1;
+		srvDesc.Texture2D.MipLevels = subresourcesNum;
 		srvDesc.Texture2D.MostDetailedMip = 0;
 		srvDesc.Texture2D.ResourceMinLODClamp = 0;
 		srvDesc.Texture2D.PlaneSlice = 0;
 		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-
 		GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, VIEW_DEPTH));
 
 		if (hasStencil) {
 			srvDesc.Format = GetStencilReadFormat(format);
-
 			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, VIEW_STENCIL));
+		}
+
+		for (auto subIndex : MakeRange(subresourcesNum)) {
+			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Format = GetDepthReadFormat(format);
+			srvDesc.Texture2D.MipLevels = 1;
+			srvDesc.Texture2D.MostDetailedMip = subIndex;
+			srvDesc.Texture2D.ResourceMinLODClamp = 0;
+			srvDesc.Texture2D.PlaneSlice = 0;
+			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, viewsPerSubresource * (subIndex + 1) + VIEW_DEPTH));
+
+			if (hasStencil) {
+				srvDesc.Format = GetStencilReadFormat(format);
+
+				GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, viewsPerSubresource * (subIndex + 1) + VIEW_STENCIL));
+			}
 		}
 
 		ResourcesFastTable[handle.GetIndex()].srv = ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations);

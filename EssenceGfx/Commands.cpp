@@ -13,6 +13,9 @@
 
 namespace Essence {
 
+const bool GVerbosePipelineStates = false;
+const bool GVerboseRootSingatures = false;
+
 enum PipelineTypeEnum {
 	PIPELINE_UNKNOWN,
 	PIPELINE_GRAPHICS,
@@ -2108,7 +2111,10 @@ protected:
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS;
 
 		RootSignature = GetRootSignature(rootDesc, &rootRangesArray, &rootParamsArray).ptr;
-		DebugPrintRoot(rootDesc);
+
+		if (GVerboseRootSingatures) {
+			DebugPrintRoot(rootDesc);
+		}
 
 		Trim(Texture2DParams);
 		Trim(RWTexture2DParams);
@@ -2165,9 +2171,11 @@ public:
 			Verify(GetInputBindingSlots(psReflection, bindInputs, D3D12_SHADER_VISIBILITY_PIXEL));
 		}
 
-		ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(VS)));
-		if (!NoPixelShader) {
-			ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(PS)));
+		if (GVerbosePipelineStates) {
+			ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(VS)));
+			if (!NoPixelShader) {
+				ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(PS)));
+			}
 		}
 
 		PrepareInternal(constantVariables, bindInputs, constantBuffers);
@@ -2209,7 +2217,9 @@ public:
 		Verify(GetConstantBuffersAndVariables(csReflection, constantBuffers, constantVariables));
 		Verify(GetInputBindingSlots(csReflection, bindInputs, D3D12_SHADER_VISIBILITY_ALL));
 
-		ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(CS)));
+		if (GVerbosePipelineStates) {
+			ConsolePrint(Format("%s\n", (cstr)GetShaderDisplayString(CS)));
+		}
 		PrepareInternal(constantVariables, bindInputs, constantBuffers);
 
 		ComRelease(csReflection);
