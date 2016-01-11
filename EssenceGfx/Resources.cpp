@@ -664,19 +664,119 @@ void CopyFromCpuToSubresources(GPUQueue* queue, resource_slice_t dstResource, u3
 	Execute(copyCommands);
 }
 
-void CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData) {
+resource_handle CreateReadbackBufferForResource(resource_handle targetedResource) {
+	UINT64 readbackBufferSize;
+
+	auto desc = ResourcesTable[targetedResource].desc;
+	u32 subresourcesNum = GetResourceInfo(targetedResource)->subresources_num;
+	GD12Device->GetCopyableFootprints(&desc, 0, subresourcesNum, 0, nullptr, nullptr, nullptr, &readbackBufferSize);
+
+	return CreateBuffer(READBACK_MEMORY, readbackBufferSize, 0, BUFFER_NO_FLAGS, "readback heap");
+}
+
+void MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<subresource_read_info_t> *outReadInfo) {
+	UINT64 readbackBufferSize;
+	Array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(GetThreadScratchAllocator());
+	Array<u32> numRows(GetThreadScratchAllocator());
+	Array<uint64_t> rowSizes(GetThreadScratchAllocator());
+
+	u32 subresourcesNum = GetResourceInfo(readAs)->subresources_num;
+	Resize(layouts, subresourcesNum);
+	Resize(numRows, subresourcesNum);
+	Resize(rowSizes, subresourcesNum);
+
+	auto desc = ResourcesTable[readAs].desc;
+	GD12Device->GetCopyableFootprints(&desc, 0, subresourcesNum, 0, layouts.DataPtr, numRows.DataPtr, rowSizes.DataPtr, &readbackBufferSize);
+
+	auto readbackRes = GetResourceFast(buffer)->resource;
+
+	void* readData;
+	readbackRes->Map(0, nullptr, &readData);
+
+	if (outReadInfo) {
+		for (auto i : MakeRange(subresourcesNum)) {
+			subresource_read_info_t readInfo = {};
+			readInfo.data = pointer_add(readData, layouts[i].Offset);
+			readInfo.row_pitch = layouts[i].Footprint.RowPitch;
+			readInfo.width = readInfo.width = layouts[i].Footprint.Width;
+			readInfo.height = layouts[i].Footprint.Height;
+			readInfo.format = layouts[i].Footprint.Format;
+			PushBack(*outReadInfo, readInfo);
+		}
+	}
+}
+
+void UnmapReadbackBuffer(resource_handle buffer) {
+	auto readbackRes = GetResourceFast(buffer)->resource;
+	readbackRes->Unmap(0, nullptr);
+}
+
+void CopyToReadbackBuffer(GPUCommandList* list, resource_handle dst, resource_handle src) {
+	auto d12list = GetD12CommandList(list);
+
+	UINT64 readbackBufferSize;
+	Array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(GetThreadScratchAllocator());
+	Array<u32> numRows(GetThreadScratchAllocator());
+	Array<uint64_t> rowSizes(GetThreadScratchAllocator());
+
+	u32 subresourcesNum = GetResourceInfo(src)->subresources_num;
+	Resize(layouts, subresourcesNum);
+	Resize(numRows, subresourcesNum);
+	Resize(rowSizes, subresourcesNum);
+
+	auto desc = ResourcesTable[src].desc;
+	GD12Device->GetCopyableFootprints(&desc, 0, subresourcesNum, 0, layouts.DataPtr, numRows.DataPtr, rowSizes.DataPtr, &readbackBufferSize);
+
+	auto srcResource = GetResourceFast(src)->resource;
+	auto dstResource = GetResourceFast(dst)->resource;
+
+	if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
+		Check(0);
+	}
+	else {
+		TransitionBarrier(list, Slice(src), D3D12_RESOURCE_STATE_COPY_SOURCE);
+		FlushBarriers(list);
+
+		for (auto i : MakeRange(subresourcesNum)) {
+			D3D12_TEXTURE_COPY_LOCATION srcLocation;
+			srcLocation.pResource = srcResource;
+			srcLocation.SubresourceIndex = i;
+			srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+
+			D3D12_TEXTURE_COPY_LOCATION dstLocation;
+			dstLocation.pResource = dstResource;
+			dstLocation.PlacedFootprint = layouts[i];
+			dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+
+			GetD12CommandList(list)->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
+		}
+	}
+}
+
+struct DeferredDeletion {
+	resource_handle	handle;
+	GPUFenceHandle	trigger_fence;
+};
+
+Ringbuffer<DeferredDeletion> Deletions;
+
+void DeferredDestroyResource(GPUCommandList* list, resource_handle resource) {
+
+}
+
+void CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dst, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData) {
 	auto d12list = GetD12CommandList(list);
 
 	UINT64 uploadBufferSize;
-	Array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts;
-	Array<u32> numRows;
-	Array<uint64_t> rowSizes;
+	Array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(GetThreadScratchAllocator());
+	Array<u32> numRows(GetThreadScratchAllocator());
+	Array<uint64_t> rowSizes(GetThreadScratchAllocator());
 
 	Resize(layouts, subresourcesNum);
 	Resize(numRows, subresourcesNum);
 	Resize(rowSizes, subresourcesNum);
 
-	auto desc = ResourcesTable[dstResource.handle].desc;
+	auto desc = ResourcesTable[dst.handle].desc;
 	GD12Device->GetCopyableFootprints(&desc, 0, subresourcesNum, 0, layouts.DataPtr, numRows.DataPtr, rowSizes.DataPtr, &uploadBufferSize);
 
 	auto tmpUploadHeap = CreateBuffer(UPLOAD_MEMORY, uploadBufferSize, 0, BUFFER_NO_FLAGS, "upload heap");
@@ -690,10 +790,10 @@ void CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dstResourc
 	}
 
 	if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
-		CopyBufferRegion(list, dstResource.handle, 0, tmpUploadHeap, layouts[0].Offset, layouts[0].Footprint.Width);
+		CopyBufferRegion(list, dst.handle, 0, tmpUploadHeap, layouts[0].Offset, layouts[0].Footprint.Width);
 	}
 	else {
-		TransitionBarrier(list, dstResource, D3D12_RESOURCE_STATE_COPY_DEST);
+		TransitionBarrier(list, dst, D3D12_RESOURCE_STATE_COPY_DEST);
 		FlushBarriers(list);
 
 		for (auto i : MakeRange(subresourcesNum)) {
@@ -703,7 +803,7 @@ void CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dstResourc
 			srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
 
 			D3D12_TEXTURE_COPY_LOCATION dstLocation;
-			dstLocation.pResource = GetResourceFast(dstResource.handle)->resource;
+			dstLocation.pResource = GetResourceFast(dst.handle)->resource;
 			dstLocation.SubresourceIndex = i;
 			dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
 
@@ -713,10 +813,9 @@ void CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dstResourc
 
 	srcResource->Unmap(0, nullptr);
 
-	TransitionBarrier(list, dstResource, GetResourceTransitionInfo(dstResource.handle)->default_state);
+	TransitionBarrier(list, dst, GetResourceTransitionInfo(dst.handle)->default_state);
 
-	// todo:
-	//DeferredDestroyResource();
+	DeferredDestroyResource(list, tmpUploadHeap);
 }
 
 void CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size) {

@@ -31,6 +31,10 @@ resource_handle ShadowLOD;
 resource_handle LowResSM;
 resource_handle VirtualSM;
 resource_handle PagesNeeded;
+resource_handle PagesCPU[4];
+GPUFenceHandle	PagesCPUReady[4];
+u32				PagesCPUReadIndex;
+u32				PagesCPUWriteIndex;
 
 void CreateScreenResources() {
 	if (IsValid(DepthBuffer)) {
@@ -175,13 +179,15 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 	coordinate = {};
 	coordinate.Subresource = 0;
 
+	u64 width = GetResourceInfo(resource)->width;
+	u64 height = GetResourceInfo(resource)->height;
+
 	region = {};/*
 	region.UseBox = false;
 	region.NumTiles = numTiles - packedMipDesc.NumTilesForPackedMips;*/
 	region.UseBox = true;
-	region.NumTiles = 1;
-	region.Width = 1;
-	region.Height = 1;
+	region.Width = (u32)((width + tileShape.WidthInTexels - 1) / tileShape.WidthInTexels);
+	region.Height = (u32)((height + tileShape.HeightInTexels - 1) / tileShape.HeightInTexels);
 	region.Depth = 1;
 
 	flag = D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE;
@@ -212,7 +218,49 @@ void Init() {
 	VirtualSM = CreateTexture(16384, 16384, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL | TEX_MIPMAPPED | TEX_VIRTUAL, "virtual_sm");
 	PagesNeeded = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, ALLOW_UNORDERED_ACCESS | TEX_MIPMAPPED, "vsm_pages");
 
+	for (auto i : MakeRange(_countof(PagesCPU))) {
+		PagesCPU[i] = CreateReadbackBufferForResource(PagesNeeded);
+	}
+
 	MapMipTailAndDummyPage(VirtualSM, &Pages, GGPUMainQueue);
+}
+
+u32 ReadSthFromGPU() {
+	if (PagesCPUReadIndex == PagesCPUWriteIndex) {
+		return 0;
+	}
+
+	if (!IsFenceCompleted(PagesCPUReady[PagesCPUReadIndex])) {
+		return 0;
+	}
+
+	while (true) {
+		u32 nextReadIndex = (PagesCPUReadIndex + 1) % _countof(PagesCPU);
+		if (nextReadIndex != PagesCPUWriteIndex && IsFenceCompleted(PagesCPUReady[nextReadIndex])) {
+			PagesCPUReadIndex = nextReadIndex;
+		}
+		else {
+			break;
+		}
+	}
+
+	u32 ctr = 0;
+
+	Array<subresource_read_info_t> subres(GetThreadScratchAllocator());
+	MapReadbackBuffer(PagesCPU[PagesCPUReadIndex], PagesNeeded, &subres);
+
+	for (u32 y = 0; y < subres[0].height; ++y) {
+		u32* rowData = (u32*)pointer_add(subres[0].data, subres[0].row_pitch * y);
+
+		const auto W = subres[0].width;
+		for (u32 x = 0; x < W; ++x) {
+			ctr += rowData[x] > 0;
+		}
+	}
+
+	UnmapReadbackBuffer(PagesCPU[PagesCPUReadIndex]);
+
+	return ctr;
 }
 
 void Tick(float fDeltaTime) {
@@ -291,6 +339,8 @@ void Tick(float fDeltaTime) {
 	auto depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
 	using namespace DirectX;
 
+	ImGui::Text("%u", ReadSthFromGPU());
+
 	ClearRenderTarget(depthCL, GetRTV(ShadowLOD));
 	ClearRenderTarget(depthCL, GetRTV(SceneColor), float4(0.1f, 0.1f, 0.1f, 1.f));
 	ClearDepthStencil(depthCL, GetDSV(DepthBuffer));
@@ -318,10 +368,12 @@ void Tick(float fDeltaTime) {
 		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i));
 	}
 
-	D3D12_RECT rect = {};
-	rect.left = rect.top = 0;
-	rect.right = rect.bottom = 1;
-	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 0), CLEAR_DEPTH, 1, 0, 1, &rect);
+	/*D3D12_RECT rect = {};
+	rect.left = 128;
+	rect.top = 0;
+	rect.right = 256;
+	rect.bottom = 128;
+	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 0), CLEAR_DEPTH, 1, 0, 1, &rect);*/
 
 	for (auto entity : testScene.Entities) {
 
@@ -408,10 +460,15 @@ void Tick(float fDeltaTime) {
 		SetRWTexture2D(depthCL, TEXT_("CurrentLevel"), GetUAV(PagesNeeded, subresource+1));
 		Dispatch(depthCL, (target + 7) / 8, (target + 7) / 8, 1);
 		subresource++;
-
-		/*Execute(depthCL);
-		depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));*/
 	}
+
+	CopyToReadbackBuffer(depthCL, PagesCPU[PagesCPUWriteIndex], PagesNeeded);
+	PagesCPUReady[PagesCPUWriteIndex] = GetFence(depthCL);
+	u32 nextWriteIndex = (PagesCPUWriteIndex + 1) % _countof(PagesCPU);
+	if (nextWriteIndex == PagesCPUReadIndex) {
+		WaitForCompletion(PagesCPUReady[PagesCPUReadIndex]);
+	}
+	PagesCPUWriteIndex = nextWriteIndex;
 
 	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, CopyPS, PS_5_1), {});
 	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
