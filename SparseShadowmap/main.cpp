@@ -173,6 +173,12 @@ struct VirtualShadowmapState {
 	page_t							dummyPage;
 };
 
+struct VirtualSMInfo {
+	u32 pagesMapped;
+	u32 perMipPages[16];
+	u32 mipTailStart;
+} GVirtualSMInfo;
+
 void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQueue* queue, VirtualShadowmapState* State) {
 
 	u32 numTiles;
@@ -184,6 +190,8 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 	Array<D3D12_SUBRESOURCE_TILING> subresTilings(GetThreadScratchAllocator());
 	Resize(subresTilings, numSubresTilings);
 	GD12Device->GetResourceTiling(GetResourceInfo(resource)->resource, &numTiles, &packedMipDesc, &tileShape, &numSubresTilings, 0, subresTilings.DataPtr);
+
+	GVirtualSMInfo.mipTailStart = packedMipDesc.NumStandardMips;
 
 	Array<page_t> pages(GetThreadScratchAllocator());
 	pagePool->Allocate(pages, packedMipDesc.NumTilesForPackedMips);
@@ -356,12 +364,16 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 
 		page_quadtree_node_t child;
 		child.level = front.level + 1;
+		u32 childSubresource = subresource - 1;
 
 		for (int i = 0; i < 4; ++i) {
 			child.x = front.x * 2 + i % 2;
 			child.y = front.y * 2 + i / 2;
 
-			if (child.level < quadTreeDepth && get_mapping(child, subres.DataPtr, quadTreeDepth)) {
+			u32 mapping = child.level < quadTreeDepth ? get_mapping(child, subres.DataPtr, quadTreeDepth) : 0;
+			// reverse range
+			u32 minNeededSubresource = numSubres - 1 - min(mapping, numSubres - 1);
+			if (mapping && childSubresource >= minNeededSubresource) {
 				if (child.level < quadTreeDepth) {
 					PushBack(Queue, child);
 				}
@@ -371,7 +383,7 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 
 	UnmapReadbackBuffer(PagesCPU[PagesCPUReadIndex]);
 
-	/*return (u32)Size(Requests);*/
+	GVirtualSMInfo.pagesMapped -= (u32)Size(DeprecatedMappings);
 
 	Array<page_t> PagesList(GetThreadScratchAllocator());
 	Reserve(PagesList, Size(DeprecatedMappings));
@@ -381,6 +393,8 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 		coordinate.X = kv.key.x;
 		coordinate.Y = kv.key.y;
 		coordinate.Z = 0;
+
+		GVirtualSMInfo.perMipPages[kv.key.level]--;
 
 		D3D12_TILE_REGION_SIZE region = {};
 		region.UseBox = true;
@@ -417,6 +431,8 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 	Reserve(PagesList, Size(Requests));
 	pagePool->Allocate(PagesList, (u32)Size(Requests));
 
+	GVirtualSMInfo.pagesMapped += (u32)Size(Requests);
+
 	u32 reqIndex = 0;
 	for (auto req : Requests) {
 		D3D12_TILED_RESOURCE_COORDINATE coordinate = {};
@@ -424,6 +440,8 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 		coordinate.X = req.x;
 		coordinate.Y = req.y;
 		coordinate.Z = 0;
+
+		GVirtualSMInfo.perMipPages[req.level]++;
 
 		D3D12_TILE_REGION_SIZE region = {};
 		region.UseBox = true;
@@ -436,7 +454,6 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 		u32 heapOffset = pagePool->GetPageHeapOffset(PagesList[reqIndex]);
 		u32 rangeTiles = 1;
 
-		// allocate mip tail
 		GetD12Queue(queue)->UpdateTileMappings(
 			GetResourceInfo(virtualShadowmap)->resource,
 			1,
@@ -533,7 +550,11 @@ void Tick(float fDeltaTime) {
 	auto depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
 	using namespace DirectX;
 
-	ImGui::Text("%u", MapTiles(VirtualSM, &Pages, GGPUMainQueue, &State));
+	MapTiles(VirtualSM, &Pages, GGPUMainQueue, &State);
+	ImGui::Text("%u", GVirtualSMInfo.pagesMapped);
+	for (auto i : MakeRange(GVirtualSMInfo.mipTailStart)) {
+		ImGui::Text("%u: %u", i, GVirtualSMInfo.perMipPages[i]);
+	}
 
 	ClearRenderTarget(depthCL, GetRTV(ShadowLOD));
 	ClearRenderTarget(depthCL, GetRTV(SceneColor), float4(0.1f, 0.1f, 0.1f, 1.f));
@@ -554,23 +575,11 @@ void Tick(float fDeltaTime) {
 	shadowmapMatrix = XMMatrixLookAtLH(lightDirection * 200, XMVectorZero(), XMVectorSet(0, 1, 0, 1)) * XMMatrixOrthographicLH(64, 64, 1.f, 400);
 	shadowmapMatrix = XMMatrixTranspose(shadowmapMatrix);
 
-	/*for (auto subres : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
-	ClearDepthStencil(depthCL, GetDSV(VirtualSM, subres));
-	}*/
-
 	for (auto i : MakeRange(15u)) {
 		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i));
 	}
 
-	/*D3D12_RECT rect = {};
-	rect.left = 128;
-	rect.top = 0;
-	rect.right = 256;
-	rect.bottom = 128;
-	ClearDepthStencil(depthCL, GetDSV(VirtualSM, 0), CLEAR_DEPTH, 1, 0, 1, &rect);*/
-
 	for (auto entity : testScene.Entities) {
-
 		auto worldMatrix = XMMatrixTranspose(
 			XMMatrixAffineTransformation(
 				XMLoadFloat3((XMFLOAT3*)&entity.scale),
@@ -592,8 +601,6 @@ void Tick(float fDeltaTime) {
 			SetConstant(depthCL, TEXT_("World"), worldMatrix);
 			SetConstant(depthCL, TEXT_("ViewProj"), viewProjMatrix);
 			SetConstant(depthCL, TEXT_("DirectionalLightMatrix"), shadowmapMatrix);
-
-			//SetRWTexture2D(depthCL, TEXT_("PagesTexture"), Slice(PagesNeeded));
 
 			buffer_location_t vb;
 			vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
@@ -672,57 +679,34 @@ void Tick(float fDeltaTime) {
 	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(SceneColor));
 	Draw(depthCL, 3);
 
-	//Execute(depthCL);
-	//depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
+	u32 N = GetResourceInfo(PagesNeeded)->subresources_num;
+	u32 width = (u32)GetResourceInfo(PagesNeeded)->width;
+	u32 height = (u32)GetResourceInfo(PagesNeeded)->height;
+	float rowHeight = (float)height;
+	float columnWidth = (float)width;
 
-	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
-	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
-	SetDepthStencil(depthCL, {});
-	SetViewport(depthCL, 128.f, 128.f, 128.f + 1.f + 10.f, 1.f);
-	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded));
-	Draw(depthCL, 3);
-	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
-	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
-	SetDepthStencil(depthCL, {});
-	SetViewport(depthCL, 64.f, 64.f, 128.f + 1.f + 10.f + 1.f + 128.f, 1.f);
-	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded, 1));
-	Draw(depthCL, 3);
-	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
-	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
-	SetDepthStencil(depthCL, {});
-	SetViewport(depthCL, 32.f, 32.f, 128.f + 1.f + 10.f + 1.f + 128.f + 64.f, 1.f);
-	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded, 2));
-	Draw(depthCL, 3);
-	SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
-	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
-	SetDepthStencil(depthCL, {});
-	SetViewport(depthCL, 16.f, 16.f, 128.f + 1.f + 10.f + 1.f + 128.f + 64.f + 32.f, 1.f);
-	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded, 3));
-	Draw(depthCL, 3);
+	for (auto column : MakeRange(N)) {
+		SetShaderState(depthCL, SHADER_(Vsm, VShader, VS_5_1), SHADER_(Vsm, CopyUintPS, PS_5_1), {});
+		SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
+		SetDepthStencil(depthCL, {});
+		SetViewport(depthCL, (float)128, (float)128, (columnWidth + 1.f) * column, 1.f);
+		SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		SetTexture2D(depthCL, TEXT_("Image"), GetSRV(PagesNeeded, column));
+		Draw(depthCL, 3);
 
-	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, LinearizeDepthPS, PS_5_1), {});
-	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
-	SetDepthStencil(depthCL, {});
-	SetViewport(depthCL, (float)128, (float)128, 1, 1);
-	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(VirtualSM, 5));
-	SetConstant(depthCL, TEXT_("Projection_33"), XMVectorGetZ(shadowmapMatrix.r[2]));
-	SetConstant(depthCL, TEXT_("Projection_43"), XMVectorGetW(shadowmapMatrix.r[2]));
-	Draw(depthCL, 3);
+		SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, LinearizeDepthPS, PS_5_1), {});
+		SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
+		SetDepthStencil(depthCL, {});
+		SetViewport(depthCL, (float)128, (float)128, (columnWidth + 1.f) * column, rowHeight + 1.f);
+		SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		SetTexture2D(depthCL, TEXT_("Image"), GetSRV(VirtualSM, column));
+		SetConstant(depthCL, TEXT_("Projection_33"), XMVectorGetZ(shadowmapMatrix.r[2]));
+		SetConstant(depthCL, TEXT_("Projection_43"), XMVectorGetW(shadowmapMatrix.r[2]));
+		Draw(depthCL, 3);
 
-	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, LinearizeDepthPS, PS_5_1), {});
-	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
-	SetDepthStencil(depthCL, {});
-	SetViewport(depthCL, (float)64, (float)64, 1, 1 + 128.f);
-	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(VirtualSM, 9));
-	SetConstant(depthCL, TEXT_("Projection_33"), XMVectorGetZ(shadowmapMatrix.r[2]));
-	SetConstant(depthCL, TEXT_("Projection_43"), XMVectorGetW(shadowmapMatrix.r[2]));
-	Draw(depthCL, 3);
+		width >>= (u32) (width > 1);
+		height >>= (u32) (height > 1);
+	}
 
 	Execute(depthCL);
 
