@@ -591,7 +591,7 @@ void Tick(float fDeltaTime) {
 		auto renderData = GetModelRenderData(entity.model);
 
 		for (auto i : MakeRange(renderData->submeshes.num)) {
-			SetShaderState(depthCL, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
+			SetShaderState(depthCL, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, ShadowLodPShader, PS_5_1), renderData->vertex_layout);
 			SetRenderTarget(depthCL, 0, GetRTV(SceneColor));
 			SetRenderTarget(depthCL, 1, GetRTV(ShadowLOD));
 			SetDepthStencil(depthCL, GetDSV(DepthBuffer));
@@ -670,14 +670,62 @@ void Tick(float fDeltaTime) {
 		WaitForCompletion(PagesCPUReady[PagesCPUReadIndex]);
 	}
 	PagesCPUWriteIndex = nextWriteIndex;
-
+/*
 	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, CopyPS, PS_5_1), {});
 	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
 	SetDepthStencil(depthCL, {});
 	SetViewport(depthCL, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(SceneColor));
-	Draw(depthCL, 3);
+	Draw(depthCL, 3);*/
+
+	ClearRenderTarget(depthCL, GetRTV(GetCurrentBackbuffer()));
+	ClearDepthStencil(depthCL, GetDSV(DepthBuffer));
+
+	for (auto entity : testScene.Entities) {
+		auto worldMatrix = XMMatrixTranspose(
+			XMMatrixAffineTransformation(
+				XMLoadFloat3((XMFLOAT3*)&entity.scale),
+				XMVectorZero(),
+				XMLoadFloat4((XMFLOAT4*)&entity.qrotation),
+				XMLoadFloat3((XMFLOAT3*)&entity.position)
+				));
+
+		auto renderData = GetModelRenderData(entity.model);
+
+		for (auto i : MakeRange(renderData->submeshes.num)) {
+			SetShaderState(depthCL, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
+			SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
+			SetDepthStencil(depthCL, GetDSV(DepthBuffer));
+			SetViewport(depthCL, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
+			SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+			SetConstant(depthCL, TEXT_("World"), worldMatrix);
+			SetConstant(depthCL, TEXT_("ViewProj"), viewProjMatrix);
+			SetConstant(depthCL, TEXT_("DirectionalLightMatrix"), shadowmapMatrix);
+			SetTexture2D(depthCL, TEXT_("Shadowmap"), GetSRV(VirtualSM));
+			float3 f3LightDirection = toFloat3(lightDirection);
+			SetConstant(depthCL, TEXT_("LightDirection"), f3LightDirection);
+			SetTexture2D(depthCL, TEXT_("ShadowMipLookup"), GetSRV(PagesNeeded));
+
+			buffer_location_t vb;
+			vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
+			vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
+			vb.stride = sizeof(mesh_vertex_t);
+
+			SetVertexStream(depthCL, 0, vb);
+
+			buffer_location_t ib;
+			ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
+			ib.size = renderData->indices_num * sizeof(u32);
+			ib.stride = sizeof(u32);
+
+			SetIndexBuffer(depthCL, ib);
+
+			auto submesh = renderData->submeshes[i];
+			DrawIndexed(depthCL, submesh.index_count, submesh.start_index, submesh.base_vertex);
+		}
+	}
 
 	u32 N = GetResourceInfo(PagesNeeded)->subresources_num;
 	u32 width = (u32)GetResourceInfo(PagesNeeded)->width;

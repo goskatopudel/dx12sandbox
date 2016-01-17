@@ -39,11 +39,10 @@ VOut VShader(uint vertexId : SV_VertexID)
 }
 
 Texture2D<uint> 	Image : register(t0);
-SamplerState    	Sampler : register(s0);
 
 float4 CopyUintPS(float4 position : SV_POSITION, float2 texcoord : TEXCOORD) : SV_TARGET
 {
 	uint val = Image[texcoord * 128].r;
 	if(val == 0) discard;
-	return (val.rrrr < 16) ? 0.5f : 1.f;
+	return val.rrrr / 32.f;
 }

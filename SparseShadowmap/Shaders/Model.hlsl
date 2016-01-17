@@ -35,7 +35,7 @@ VOut VShader(VIn input, uint vertexId : SV_VertexID)
 	return output;
 }
 
-void PShader(VOut interpolated, out float4 outColor : SV_TARGET0, out uint outLOD : SV_TARGET1)
+void ShadowLodPShader(VOut interpolated, out float4 outColor : SV_TARGET0, out uint outLOD : SV_TARGET1)
 {
 	float4 smpos = mul(float4(interpolated.wposition, 1), DirectionalLightMatrix);
 	smpos /= smpos.w;
@@ -52,14 +52,33 @@ void PShader(VOut interpolated, out float4 outColor : SV_TARGET0, out uint outLO
 	float2 page_texture_res = 128;
 	uint2 page_texel = smuv.xy * page_texture_res;
 
-	//uint ulod = clamp(lod, 0.f, 14.f);
-
 	outLOD = (uint) lod;
-
-	// uint old_tmp;
-	// //InterlockedMax(PagesTexture[page_texel], ulod, old_tmp);
-	// PagesTexture[page_texel] = ulod;
-
 	outColor = float4(frac(smuv.xy * 256.f * 32.f * 2.f), 0, 0);
-	//float4(pow(frac(smuv * 100), 2.2f), 0, 0);
+}
+
+
+Texture2D<float> 	Shadowmap : register( t0 );
+Texture2D<uint>		ShadowMipLookup : register( t1 );
+SamplerState    	Sampler : register(s0);
+float3 				LightDirection;
+
+void PShader(VOut interpolated, out float4 outColor : SV_TARGET0)
+{
+	float4 smpos = mul(float4(interpolated.wposition, 1), DirectionalLightMatrix);
+	smpos /= smpos.w;
+	smpos.y *= -1;
+	float2 smuv = saturate(smpos.xy * 0.5 + 0.5);
+	uint2 page = smuv.xy * 128;
+	uint lmip = ShadowMipLookup[page].r;
+
+	uint width, height, mipLevels;
+	Shadowmap.GetDimensions(0, width, height, mipLevels);
+	uint mip = clamp(mipLevels - 1 - lmip, 0, mipLevels - 1);
+
+	float smz = Shadowmap.SampleLevel(Sampler, smuv, mip).r;
+
+	float lit = smz > (smpos.z - 0.0001f);
+	float light = saturate(dot(normalize(interpolated.normal), LightDirection));
+
+	outColor = lit * light + 0.05f;
 }

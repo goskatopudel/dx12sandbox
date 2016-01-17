@@ -1568,6 +1568,11 @@ root_signature_t GetRootSignature(D3D12_ROOT_SIGNATURE_DESC const& desc,
 	Array<D3D12_DESCRIPTOR_RANGE> const* ranges,
 	Array<D3D12_ROOT_PARAMETER> const* params
 	) {
+	Array<D3D12_STATIC_SAMPLER_DESC> samplers(GetThreadScratchAllocator());
+	//D3D12_STATIC_SAMPLER_DESC sampler = {};
+	//sampler.Filter = 
+
+
 	// hash only content, not pointers!
 	u64 rootHash = 0;
 	rootHash = Hash::MurmurHash2_64(ranges->DataPtr, (i32)(ranges->Size * sizeof(ranges->DataPtr[0])), rootHash);
