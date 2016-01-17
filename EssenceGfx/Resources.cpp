@@ -691,7 +691,10 @@ void MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<sub
 	auto readbackRes = GetResourceFast(buffer)->resource;
 
 	void* readData;
-	readbackRes->Map(0, nullptr, &readData);
+	D3D12_RANGE readRange = {};
+	readRange.Begin = 0;
+	readRange.End = readbackBufferSize;
+	readbackRes->Map(0, &readRange, &readData);
 
 	if (outReadInfo) {
 		for (auto i : MakeRange(subresourcesNum)) {

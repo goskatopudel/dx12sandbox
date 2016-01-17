@@ -63,12 +63,18 @@ public:
 	struct page_heap_t {
 		ID3D12Heap*	D12Heap;
 	};
+	struct pending_fence_t {
+		GPUFenceHandle	fence;
+		u32				pages_num;
+	};
 
-	u32					PagesPerHeap;
-	static const u32	D12PageSize = 65536;
+	u32							PagesPerHeap;
+	static const u32			D12PageSize = 65536;
 
-	Array<page_heap_t>	Heaps;
-	Ringbuffer<page_t>	FreePages;
+	Array<page_heap_t>			Heaps;
+	Ringbuffer<page_t>			FreePages;
+	Ringbuffer<page_t>			PendingPages;
+	Ringbuffer<pending_fence_t>	PendingFences;
 
 	PagePool() {
 		PagesPerHeap = 128;
@@ -80,6 +86,8 @@ public:
 		}
 		::FreeMemory(Heaps);
 		::FreeMemory(FreePages);
+		::FreeMemory(PendingPages);
+		::FreeMemory(PendingFences);
 	}
 
 	~PagePool() {
@@ -117,10 +125,34 @@ public:
 		}
 	}
 
-	void Free(Array<page_t>const& pagesList) {
-
+	void Free(Array<page_t>const& pagesList, GPUFenceHandle fence) {
+		if (Size(pagesList) == 0) {
+			return;
+		}
+		pending_fence_t pendingFence = {};
+		pendingFence.fence = fence;
+		pendingFence.pages_num = (u32)Size(pagesList);
+		PushBack(PendingFences, pendingFence);
+		for (auto i : MakeRange(Size(pagesList))) {
+			PushBack(PendingPages, pagesList[i]);
+		}
 	}
-	
+
+	void RecyclePages() {
+		while (Size(PendingFences)) {
+			if (IsFenceCompleted(Front(PendingFences).fence)) {
+				for (auto i : MakeRange(Front(PendingFences).pages_num)) {
+					PushBack(FreePages, Front(PendingPages));
+					PopFront(PendingPages);
+				}
+				PopFront(PendingFences);
+			}
+			else {
+				break;
+			}
+		}
+	}
+
 	ID3D12Heap* GetPageHeap(page_t page) {
 		return Heaps[page.index / PagesPerHeap].D12Heap;
 	}
@@ -130,7 +162,18 @@ public:
 	}
 };
 
-void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQueue* queue) {
+struct tile_mapping_t {
+	u16		x;
+	u16		y;
+	u8		level;
+};
+
+struct VirtualShadowmapState {
+	Hashmap<tile_mapping_t, page_t> mappedPages;
+	page_t							dummyPage;
+};
+
+void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQueue* queue, VirtualShadowmapState* State) {
 
 	u32 numTiles;
 	D3D12_PACKED_MIP_INFO packedMipDesc;
@@ -168,45 +211,46 @@ void MapMipTailAndDummyPage(resource_handle resource, PagePool* pagePool, GPUQue
 		&flag,
 		&heapOffset,
 		&rangeTiles,
-		D3D12_TILE_MAPPING_FLAG_NONE);
+		D3D12_TILE_MAPPING_FLAG_NO_HAZARD);
 
 	// allocate rest with dummy page
 	Clear(pages);
 	pagePool->Allocate(pages, 1);
 
-	heapOffset = pagePool->GetPageHeapOffset(pages[0]);
+	page_t dummyPage = pages[0];
+	State->dummyPage = dummyPage;
 
-	coordinate = {};
-	coordinate.Subresource = 0;
+	heapOffset = pagePool->GetPageHeapOffset(dummyPage);
 
-	u64 width = GetResourceInfo(resource)->width;
-	u64 height = GetResourceInfo(resource)->height;
+	for (u32 subres : MakeRange(packedMipDesc.NumStandardMips)) {
+		D3D12_TILED_RESOURCE_COORDINATE coordinate = {};
+		coordinate.Subresource = subres;
 
-	region = {};/*
-	region.UseBox = false;
-	region.NumTiles = numTiles - packedMipDesc.NumTilesForPackedMips;*/
-	region.UseBox = true;
-	region.Width = (u32)((width + tileShape.WidthInTexels - 1) / tileShape.WidthInTexels);
-	region.Height = (u32)((height + tileShape.HeightInTexels - 1) / tileShape.HeightInTexels);
-	region.Depth = 1;
+		D3D12_TILE_REGION_SIZE region = {};
+		region.UseBox = true;
+		region.Width = subresTilings[subres].WidthInTiles;
+		region.Height = subresTilings[subres].HeightInTiles;
+		region.Depth = 1;
+		D3D12_TILE_RANGE_FLAGS flag = D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE;
 
-	flag = D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE;
-	rangeTiles = 1;
+		rangeTiles = subresTilings[subres].WidthInTiles * subresTilings[subres].HeightInTiles;
 
-	GetD12Queue(queue)->UpdateTileMappings(
-		GetResourceInfo(resource)->resource,
-		1,
-		&coordinate,
-		&region,
-		pagePool->GetPageHeap(pages[0]),
-		1,
-		&flag,
-		&heapOffset,
-		&rangeTiles,
-		D3D12_TILE_MAPPING_FLAG_NONE);
+		GetD12Queue(queue)->UpdateTileMappings(
+			GetResourceInfo(resource)->resource,
+			1,
+			&coordinate,
+			&region,
+			pagePool->GetPageHeap(dummyPage),
+			1,
+			&flag,
+			&heapOffset,
+			&rangeTiles,
+			D3D12_TILE_MAPPING_FLAG_NO_HAZARD);
+	}
 }
 
 PagePool Pages;
+VirtualShadowmapState State;
 
 void Init() {
 	SpawnEntity(testScene, GetModel(NAME_("models/sibenik.obj")));
@@ -222,16 +266,16 @@ void Init() {
 		PagesCPU[i] = CreateReadbackBufferForResource(PagesNeeded);
 	}
 
-	MapMipTailAndDummyPage(VirtualSM, &Pages, GGPUMainQueue);
+	MapMipTailAndDummyPage(VirtualSM, &Pages, GGPUMainQueue, &State);
 }
 
-u32 ReadSthFromGPU() {
+u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* queue, VirtualShadowmapState *MappingState) {
 	if (PagesCPUReadIndex == PagesCPUWriteIndex) {
-		return 0;
+		return (u32)Size(MappingState->mappedPages);
 	}
 
 	if (!IsFenceCompleted(PagesCPUReady[PagesCPUReadIndex])) {
-		return 0;
+		return (u32)Size(MappingState->mappedPages);
 	}
 
 	while (true) {
@@ -244,23 +288,173 @@ u32 ReadSthFromGPU() {
 		}
 	}
 
-	u32 ctr = 0;
+	u32 numTiles;
+	D3D12_PACKED_MIP_INFO packedMipDesc;
+	D3D12_TILE_SHAPE tileShape;
+
+	u32 numSubres = GetResourceInfo(virtualShadowmap)->subresources_num;
+	//
+	Array<D3D12_SUBRESOURCE_TILING> subresTilings(GetThreadScratchAllocator());
+	Resize(subresTilings, numSubres);
+	GD12Device->GetResourceTiling(GetResourceInfo(virtualShadowmap)->resource, &numTiles, &packedMipDesc, &tileShape, &numSubres, 0, subresTilings.DataPtr);
+
+	u8 mipTailStart = packedMipDesc.NumStandardMips;
 
 	Array<subresource_read_info_t> subres(GetThreadScratchAllocator());
 	MapReadbackBuffer(PagesCPU[PagesCPUReadIndex], PagesNeeded, &subres);
 
-	for (u32 y = 0; y < subres[0].height; ++y) {
-		u32* rowData = (u32*)pointer_add(subres[0].data, subres[0].row_pitch * y);
+	u8 quadTreeDepth = (u8)Size(subres);
 
-		const auto W = subres[0].width;
-		for (u32 x = 0; x < W; ++x) {
-			ctr += rowData[x] > 0;
+	struct page_quadtree_node_t {
+		u16		x;
+		u16		y;
+		u8		level;
+	};
+
+	auto get_mapping = [](page_quadtree_node_t mapping, subresource_read_info_t*__restrict Subresources, u32 depth) {
+		u32 level = depth - 1 - mapping.level;
+		auto location = (u32*)pointer_add(Subresources[level].data, Subresources[level].row_pitch * mapping.y + mapping.x * sizeof(u32));
+		return *location;
+	};
+
+	page_quadtree_node_t root;
+	root.level = 0;
+	root.x = 0;
+	root.y = 0;
+
+	// old set, new set
+	// deprecated = old - intersection(old, new)
+	auto DeprecatedMappings = Copy(MappingState->mappedPages, GetThreadScratchAllocator());
+	Array<tile_mapping_t> Requests(GetThreadScratchAllocator());
+
+	Ringbuffer<page_quadtree_node_t> Queue(GetThreadScratchAllocator());
+	PushBack(Queue, root);
+	Ringbuffer<page_quadtree_node_t> TailQueue(GetThreadScratchAllocator());
+	while (Size(Queue)) {
+		page_quadtree_node_t front = Front(Queue);
+		PopFront(Queue);
+
+		u32 subresource = quadTreeDepth - front.level - 1;
+		if (subresource < packedMipDesc.NumStandardMips) {
+			tile_mapping_t mapping;
+			mapping.level = subresource;
+			mapping.x = front.x;
+			mapping.y = front.y;
+
+			Check(mapping.x < 128);
+			Check(mapping.y < 128);
+			Check(mapping.level < packedMipDesc.NumStandardMips);
+
+			auto pMapping = Get(DeprecatedMappings, mapping);
+			if (pMapping) {
+				Remove(DeprecatedMappings, mapping);
+			}
+			else {
+				PushBack(Requests, mapping);
+			}
+		}
+
+		page_quadtree_node_t child;
+		child.level = front.level + 1;
+
+		for (int i = 0; i < 4; ++i) {
+			child.x = front.x * 2 + i % 2;
+			child.y = front.y * 2 + i / 2;
+
+			if (child.level < quadTreeDepth && get_mapping(child, subres.DataPtr, quadTreeDepth)) {
+				if (child.level < quadTreeDepth) {
+					PushBack(Queue, child);
+				}
+			}
 		}
 	}
 
 	UnmapReadbackBuffer(PagesCPU[PagesCPUReadIndex]);
 
-	return ctr;
+	/*return (u32)Size(Requests);*/
+
+	Array<page_t> PagesList(GetThreadScratchAllocator());
+	Reserve(PagesList, Size(DeprecatedMappings));
+	for (auto kv : DeprecatedMappings) {
+		D3D12_TILED_RESOURCE_COORDINATE coordinate = {};
+		coordinate.Subresource = kv.key.level;
+		coordinate.X = kv.key.x;
+		coordinate.Y = kv.key.y;
+		coordinate.Z = 0;
+
+		D3D12_TILE_REGION_SIZE region = {};
+		region.UseBox = true;
+		region.NumTiles = 1;
+		region.Width = 1;
+		region.Height = 1;
+		region.Depth = 1;
+		D3D12_TILE_RANGE_FLAGS flag = D3D12_TILE_RANGE_FLAG_NONE;
+
+		u32 heapOffset = pagePool->GetPageHeapOffset(MappingState->dummyPage);
+		u32 rangeTiles = 1;
+
+		// allocate mip tail
+		GetD12Queue(queue)->UpdateTileMappings(
+			GetResourceInfo(virtualShadowmap)->resource,
+			1,
+			&coordinate,
+			&region,
+			pagePool->GetPageHeap(MappingState->dummyPage),
+			1,
+			&flag,
+			&heapOffset,
+			&rangeTiles,
+			D3D12_TILE_MAPPING_FLAG_NONE);
+
+		PushBack(PagesList, kv.value);
+		Remove(MappingState->mappedPages, kv.key);
+	}
+	pagePool->Free(PagesList, GetFence(queue));
+
+	pagePool->RecyclePages();
+
+	Clear(PagesList);
+	Reserve(PagesList, Size(Requests));
+	pagePool->Allocate(PagesList, (u32)Size(Requests));
+
+	u32 reqIndex = 0;
+	for (auto req : Requests) {
+		D3D12_TILED_RESOURCE_COORDINATE coordinate = {};
+		coordinate.Subresource = req.level;
+		coordinate.X = req.x;
+		coordinate.Y = req.y;
+		coordinate.Z = 0;
+
+		D3D12_TILE_REGION_SIZE region = {};
+		region.UseBox = true;
+		region.NumTiles = 1;
+		region.Width = 1;
+		region.Height = 1;
+		region.Depth = 1;
+		D3D12_TILE_RANGE_FLAGS flag = D3D12_TILE_RANGE_FLAG_NONE;
+
+		u32 heapOffset = pagePool->GetPageHeapOffset(PagesList[reqIndex]);
+		u32 rangeTiles = 1;
+
+		// allocate mip tail
+		GetD12Queue(queue)->UpdateTileMappings(
+			GetResourceInfo(virtualShadowmap)->resource,
+			1,
+			&coordinate,
+			&region,
+			pagePool->GetPageHeap(PagesList[reqIndex]),
+			1,
+			&flag,
+			&heapOffset,
+			&rangeTiles,
+			D3D12_TILE_MAPPING_FLAG_NONE);
+
+		Set(MappingState->mappedPages, req, PagesList[reqIndex]);
+
+		reqIndex++;
+	}
+
+	return (u32)Size(MappingState->mappedPages);
 }
 
 void Tick(float fDeltaTime) {
@@ -339,7 +533,7 @@ void Tick(float fDeltaTime) {
 	auto depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
 	using namespace DirectX;
 
-	ImGui::Text("%u", ReadSthFromGPU());
+	ImGui::Text("%u", MapTiles(VirtualSM, &Pages, GGPUMainQueue, &State));
 
 	ClearRenderTarget(depthCL, GetRTV(ShadowLOD));
 	ClearRenderTarget(depthCL, GetRTV(SceneColor), float4(0.1f, 0.1f, 0.1f, 1.f));
@@ -347,7 +541,7 @@ void Tick(float fDeltaTime) {
 	ClearDepthStencil(depthCL, GetDSV(LowResSM));
 	ClearUnorderedAccess(depthCL, GetUAV(PagesNeeded));
 
-	xmvec lightDirection = XMVector3Normalize(XMVectorSet(1,1,1,0));
+	xmvec lightDirection = XMVector3Normalize(XMVectorSet(1, 1, 1, 0));
 	xmmatrix shadowmapMatrix;
 
 	auto viewMatrix = CameraControlerPtr->GetViewMatrix();
@@ -357,14 +551,14 @@ void Tick(float fDeltaTime) {
 	viewMatrix = XMMatrixTranspose(viewMatrix);
 	projMatrix = XMMatrixTranspose(projMatrix);
 
-	shadowmapMatrix = XMMatrixLookAtLH(lightDirection * 200, XMVectorZero(), XMVectorSet(0,1,0,1)) * XMMatrixOrthographicLH(64, 64, 1.f, 400);
+	shadowmapMatrix = XMMatrixLookAtLH(lightDirection * 200, XMVectorZero(), XMVectorSet(0, 1, 0, 1)) * XMMatrixOrthographicLH(64, 64, 1.f, 400);
 	shadowmapMatrix = XMMatrixTranspose(shadowmapMatrix);
 
 	/*for (auto subres : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
-		ClearDepthStencil(depthCL, GetDSV(VirtualSM, subres));
+	ClearDepthStencil(depthCL, GetDSV(VirtualSM, subres));
 	}*/
 
-	for (auto i : MakeRange(8u, 15u)) {
+	for (auto i : MakeRange(15u)) {
 		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i));
 	}
 
@@ -424,7 +618,7 @@ void Tick(float fDeltaTime) {
 			SetRenderTarget(depthCL, 1, {});
 
 			u32 viewportSize = (u32)GetResourceInfo(VirtualSM)->width;
-			for (auto i : MakeRange(8u, 15u)) {
+			for (auto i : MakeRange(15u)) {
 				SetShaderState(depthCL, SHADER_(Model, VShader, VS_5_1), {}, renderData->vertex_layout);
 				SetViewport(depthCL, (float)(viewportSize >> i), (float)(viewportSize >> i));
 
@@ -457,7 +651,7 @@ void Tick(float fDeltaTime) {
 		SetComputeShaderState(depthCL, SHADER_(Mipmap, BuildMinMip, CS_5_1));
 
 		SetTexture2D(depthCL, TEXT_("LowerLevel"), GetSRV(PagesNeeded, subresource));
-		SetRWTexture2D(depthCL, TEXT_("CurrentLevel"), GetUAV(PagesNeeded, subresource+1));
+		SetRWTexture2D(depthCL, TEXT_("CurrentLevel"), GetUAV(PagesNeeded, subresource + 1));
 		Dispatch(depthCL, (target + 7) / 8, (target + 7) / 8, 1);
 		subresource++;
 	}
@@ -515,7 +709,7 @@ void Tick(float fDeltaTime) {
 	SetDepthStencil(depthCL, {});
 	SetViewport(depthCL, (float)128, (float)128, 1, 1);
 	SetTopology(depthCL, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(VirtualSM, 8));
+	SetTexture2D(depthCL, TEXT_("Image"), GetSRV(VirtualSM, 5));
 	SetConstant(depthCL, TEXT_("Projection_33"), XMVectorGetZ(shadowmapMatrix.r[2]));
 	SetConstant(depthCL, TEXT_("Projection_43"), XMVectorGetW(shadowmapMatrix.r[2]));
 	Draw(depthCL, 3);
@@ -543,6 +737,7 @@ void Shutdown() {
 	WaitForCompletion();
 
 	call_destructor(testScene);
+	FreeMemory(State.mappedPages);
 
 	Pages.FreeMemory();
 }

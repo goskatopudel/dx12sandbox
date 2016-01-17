@@ -464,4 +464,16 @@ template<typename K, typename V> HashmapConstIterator<K, V> Hashmap<K, V>::cend(
 	return iter;
 }
 
+template<typename K, typename V>
+Hashmap<K, V> Copy(Hashmap<K, V> const& Hm, IAllocator* allocator) {
+	Hashmap<K, V> Copied(allocator);
+
+	Copied.Buckets = std::move(Copy(Hm.Buckets, allocator));
+	Copied.Keys = std::move(Copy(Hm.Keys, allocator));
+	Copied.Values = std::move(Copy(Hm.Values, allocator));
+	Copied.Size = Hm.Size;
+
+	return Copied;
+}
+
 }

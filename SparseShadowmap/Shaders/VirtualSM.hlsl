@@ -27,8 +27,8 @@ void PreparePages( uint3 DTid : SV_DispatchThreadID )
 	float4 smpos = mul(float4(world_pos, 1), ShadowmapMatrix);
 	smpos /= smpos.w;
 
+	smpos.y *= -1;
 	float2 smuv = saturate(smpos.xy * 0.5 + 0.5);
-
 	uint2 page = smuv.xy * 128;
 
 	uint old_level;

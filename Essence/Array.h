@@ -167,8 +167,8 @@ template<typename T> void		Expand(Array<T>& A, size_t minCapacity) {
 }
 
 template<typename T> void		Reserve(Array<T>& A, size_t capacity) {
-	Check(capacity >= A.Capacity);
-	if (A.Capacity != capacity) {
+	//Check(capacity >= A.Capacity);
+	if (A.Capacity < capacity) {
 		void* new_data = A.Allocator->Allocate(sizeof(T) * capacity, __alignof(T));
 		if (A.DataPtr) {
 			memcpy(new_data, A.DataPtr, sizeof(T) * A.Size);
@@ -276,6 +276,16 @@ template<typename T> ArrayConstIterator<T> Array<T>::cbegin() const {
 template<typename T> ArrayConstIterator<T> Array<T>::cend() const {
 	ArrayConstIterator<T> iter { this, (u32)Size };
 	return iter;
+}
+
+template<typename T>
+Array<T> Copy(Array<T> const& A, IAllocator* allocator) {
+	Array<T> Copied(allocator);
+	Reserve(Copied, A.Capacity);
+	Copied.Size = A.Size;
+	memcpy(Copied.DataPtr, A.DataPtr, Size(A) * sizeof(T));
+
+	return Copied;
 }
 
 }

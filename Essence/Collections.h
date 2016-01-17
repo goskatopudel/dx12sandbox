@@ -25,11 +25,14 @@ template<typename T> struct Array {
 	ArrayConstIterator<T>	cbegin() const;
 	ArrayConstIterator<T>	cend() const;
 
-	IAllocator*		Allocator;
+	IAllocator*				Allocator;
 	size_t					Size;
 	size_t					Capacity;
 	T*						DataPtr;
 };
+
+template<typename T>
+Array<T> Copy(Array<T> const& A, IAllocator* allocator);
 
 template<typename T> struct ArrayIterator {
 	Array<T>* const	Collection;
@@ -95,6 +98,9 @@ struct Hashmap {
 	Array<V>			Values;
 	size_t				Size;
 };
+
+template<typename K, typename V>
+Hashmap<K, V> Copy(Hashmap<K, V> const& Hm, IAllocator* allocator);
 
 template<typename K, typename V> struct KeyValue {
 	K	key;
