@@ -507,8 +507,9 @@ public:
 	}
 
 	void FenceExecution(GPUFenceHandle handle) {
-		// todo: collapse
-		PushBack(Fences, handle);
+		if (Size(Fences) && Back(Fences) != handle) {
+			PushBack(Fences, handle);
+		}
 	}
 
 	bool IsCompleted() {
@@ -569,9 +570,10 @@ public:
 		return allocator;
 	}
 
-	void Return(GPUCommandAllocator* allocator) {
+	void Return(GPUCommandAllocator* allocator, GPUFenceHandle fence) {
 		Check(allocator->State == CA_RECORDING);
 		allocator->State = CA_READY;
+		allocator->FenceExecution(fence);
 		PushBack(ReadyAllocators, allocator);
 		allocator->ListsRecorded++;
 	}
@@ -1275,7 +1277,7 @@ void					Execute(GPUCommandList* list) {
 	list->State = CL_EXECUTED;
 	list->Fence = {};
 
-	list->CommandAllocator->Pool->Return(list->CommandAllocator);
+	list->CommandAllocator->Pool->Return(list->CommandAllocator, queue->LastSignaledFence);
 	list->CommandAllocator = nullptr;
 
 	list->Pool->Return(list);
@@ -1287,7 +1289,7 @@ void					Execute(GPUCommandList* list) {
 		patchupList->State = CL_EXECUTED;
 		patchupList->Fence = {};
 
-		patchupList->CommandAllocator->Pool->Return(patchupList->CommandAllocator);
+		patchupList->CommandAllocator->Pool->Return(patchupList->CommandAllocator, queue->LastSignaledFence);
 		patchupList->CommandAllocator = nullptr;
 
 		patchupList->Pool->Return(patchupList);

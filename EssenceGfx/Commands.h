@@ -20,6 +20,10 @@ struct GPUFenceHandle {
 	u32	generation;
 };
 
+inline bool operator !=(GPUFenceHandle A, GPUFenceHandle B) {
+	return A.handle != B.handle || A.generation == B.generation;
+}
+
 struct upload_allocation_t {
 	GPU_VIRTUAL_ADDRESS		virtual_address;
 	void*			write_ptr;

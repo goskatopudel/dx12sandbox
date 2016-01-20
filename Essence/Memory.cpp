@@ -207,6 +207,12 @@ void* ScratchAllocator::Allocate(size_t size, size_t alignment) {
 		Check(ThreadId == GetThreadId());
 	}
 
+	if (4 * size > pointer_sub(SegmentEnd, SegmentBegin)) {
+		void* ptr = BackingAllocator->Allocate(size, alignment);
+		Check(ptr < SegmentBegin || SegmentEnd < ptr);
+		return ptr;
+	}
+
 	alignment = max(alignment, ALLOCATION_MIN_ALIGNMENT);
 	static_assert(sizeof(scratch_header_t) == ALLOCATION_MIN_ALIGNMENT, "header alignment & size mismatch");
 	auto pheader = (scratch_header_t*)WriteAddress; 

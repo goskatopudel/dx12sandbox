@@ -261,7 +261,8 @@ PagePool Pages;
 VirtualShadowmapState State;
 
 void Init() {
-	SpawnEntity(testScene, GetModel(NAME_("models/sibenik.obj")));
+	auto sponza = SpawnEntity(testScene, GetModel(NAME_("models/sponza.obj")));
+	SetScale(testScene, sponza, 0.01f);
 	/*auto hairball = SpawnEntity(testScene, GetModel(NAME_("models/hairball.obj")));
 	SetPosition(testScene, hairball, float3(50, 0, 0));*/
 	CreateScreenResources();
@@ -334,10 +335,33 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 	// deprecated = old - intersection(old, new)
 	auto DeprecatedMappings = Copy(MappingState->mappedPages, GetThreadScratchAllocator());
 	Array<tile_mapping_t> Requests(GetThreadScratchAllocator());
+/*
+	for (u32 l = 0; l < Size(subres); ++l) {
+		u32 level = l;
+		for (u32 y = 0; y < subres[level].height; ++y) {
+			for (u32 x = 0; x < subres[level].width; ++x) {
+				u32 val = *(u32*)pointer_add(subres[level].data, subres[level].row_pitch * y + x * sizeof(u32));
+				u32 minNeededSubresource = numSubres - 1 - min(val, numSubres - 1);
+				if (val && l >= minNeededSubresource) {
+					tile_mapping_t mapping;
+					mapping.level = l;
+					mapping.x = x;
+					mapping.y = y;
+
+					auto pMapping = Get(DeprecatedMappings, mapping);
+					if (pMapping) {
+						Remove(DeprecatedMappings, mapping);
+					}
+					else {
+						PushBack(Requests, mapping);
+					}
+				}
+			}
+		}
+	}*/
 
 	Ringbuffer<page_quadtree_node_t> Queue(GetThreadScratchAllocator());
 	PushBack(Queue, root);
-	Ringbuffer<page_quadtree_node_t> TailQueue(GetThreadScratchAllocator());
 	while (Size(Queue)) {
 		page_quadtree_node_t front = Front(Queue);
 		PopFront(Queue);
@@ -562,7 +586,7 @@ void Tick(float fDeltaTime) {
 	ClearDepthStencil(depthCL, GetDSV(LowResSM));
 	ClearUnorderedAccess(depthCL, GetUAV(PagesNeeded));
 
-	xmvec lightDirection = XMVector3Normalize(XMVectorSet(1, 1, 1, 0));
+	xmvec lightDirection = XMVector3Normalize(XMVectorSet(1, 2, 1, 0));
 	xmmatrix shadowmapMatrix;
 
 	auto viewMatrix = CameraControlerPtr->GetViewMatrix();
@@ -575,8 +599,9 @@ void Tick(float fDeltaTime) {
 	shadowmapMatrix = XMMatrixLookAtLH(lightDirection * 200, XMVectorZero(), XMVectorSet(0, 1, 0, 1)) * XMMatrixOrthographicLH(64, 64, 1.f, 400);
 	shadowmapMatrix = XMMatrixTranspose(shadowmapMatrix);
 
-	for (auto i : MakeRange(15u)) {
-		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i));
+	for (auto i : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
+		//ClearDepthStencil(depthCL, GetDSV(VirtualSM, i), CLEAR_DEPTH, (float)(GetResourceInfo(VirtualSM)->subresources_num - 1 - i) / 16.f);
+		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i), CLEAR_DEPTH);
 	}
 
 	for (auto entity : testScene.Entities) {
@@ -668,6 +693,11 @@ void Tick(float fDeltaTime) {
 	u32 nextWriteIndex = (PagesCPUWriteIndex + 1) % _countof(PagesCPU);
 	if (nextWriteIndex == PagesCPUReadIndex) {
 		WaitForCompletion(PagesCPUReady[PagesCPUReadIndex]);
+
+		Check(IsFenceCompleted(PagesCPUReady[PagesCPUReadIndex]));
+		u32 nextReadIndex = (PagesCPUReadIndex + 1) % _countof(PagesCPU);
+		WaitForCompletion(PagesCPUReady[nextReadIndex]);
+		PagesCPUReadIndex = nextReadIndex;
 	}
 	PagesCPUWriteIndex = nextWriteIndex;
 /*

@@ -56,6 +56,17 @@ void ShadowLodPShader(VOut interpolated, out float4 outColor : SV_TARGET0, out u
 	outColor = float4(frac(smuv.xy * 256.f * 32.f * 2.f), 0, 0);
 }
 
+float3 HueToRgb(float H) {
+    float R = abs(H * 6 - 3) - 1;
+    float G = 2 - abs(H * 6 - 2);
+    float B = 2 - abs(H * 6 - 4);
+    return saturate(float3(R,G,B));
+}
+
+float3 HsvToRgb(float3 HSV) {
+    float3 RGB = HueToRgb(HSV.x);
+    return ((RGB - 1) * HSV.y + 1) * HSV.z;
+}
 
 Texture2D<float> 	Shadowmap : register( t0 );
 Texture2D<uint>		ShadowMipLookup : register( t1 );
@@ -73,12 +84,12 @@ void PShader(VOut interpolated, out float4 outColor : SV_TARGET0)
 
 	uint width, height, mipLevels;
 	Shadowmap.GetDimensions(0, width, height, mipLevels);
-	uint mip = clamp(mipLevels - 1 - lmip, 0, mipLevels - 1);
+	float mip = clamp((float)mipLevels - 1 - (float)lmip, 0, mipLevels - 1);
 
 	float smz = Shadowmap.SampleLevel(Sampler, smuv, mip).r;
 
 	float lit = smz > (smpos.z - 0.0001f);
 	float light = saturate(dot(normalize(interpolated.normal), LightDirection));
 
-	outColor = lit * light + 0.05f;
+	outColor = (lit * light + 0.05f);
 }
