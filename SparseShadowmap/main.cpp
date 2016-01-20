@@ -31,10 +31,10 @@ resource_handle ShadowLOD;
 resource_handle LowResSM;
 resource_handle VirtualSM;
 resource_handle PagesNeeded;
-resource_handle PagesCPU[4];
-GPUFenceHandle	PagesCPUReady[4];
-u32				PagesCPUReadIndex;
-u32				PagesCPUWriteIndex;
+resource_handle PagesNeededPrev;
+resource_handle PagesCPU[2];
+GPUFenceHandle	PagesCPUReady[2];
+u32				PagesWriteIndex;
 
 void CreateScreenResources() {
 	if (IsValid(DepthBuffer)) {
@@ -270,6 +270,7 @@ void Init() {
 	LowResSM = CreateTexture(128, 128, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL, "low_res_sm");
 	VirtualSM = CreateTexture(16384, 16384, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL | TEX_MIPMAPPED | TEX_VIRTUAL, "virtual_sm");
 	PagesNeeded = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, ALLOW_UNORDERED_ACCESS | TEX_MIPMAPPED, "vsm_pages");
+	PagesNeededPrev = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, TEX_MIPMAPPED, "vsm_pages_prev");
 
 	for (auto i : MakeRange(_countof(PagesCPU))) {
 		PagesCPU[i] = CreateReadbackBufferForResource(PagesNeeded);
@@ -279,23 +280,9 @@ void Init() {
 }
 
 u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* queue, VirtualShadowmapState *MappingState) {
-	if (PagesCPUReadIndex == PagesCPUWriteIndex) {
-		return (u32)Size(MappingState->mappedPages);
-	}
+	u32 readIndex = (PagesWriteIndex + 1) % _countof(PagesCPU);
 
-	if (!IsFenceCompleted(PagesCPUReady[PagesCPUReadIndex])) {
-		return (u32)Size(MappingState->mappedPages);
-	}
-
-	while (true) {
-		u32 nextReadIndex = (PagesCPUReadIndex + 1) % _countof(PagesCPU);
-		if (nextReadIndex != PagesCPUWriteIndex && IsFenceCompleted(PagesCPUReady[nextReadIndex])) {
-			PagesCPUReadIndex = nextReadIndex;
-		}
-		else {
-			break;
-		}
-	}
+	WaitForCompletion(PagesCPUReady[readIndex]);
 
 	u32 numTiles;
 	D3D12_PACKED_MIP_INFO packedMipDesc;
@@ -310,7 +297,7 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 	u8 mipTailStart = packedMipDesc.NumStandardMips;
 
 	Array<subresource_read_info_t> subres(GetThreadScratchAllocator());
-	MapReadbackBuffer(PagesCPU[PagesCPUReadIndex], PagesNeeded, &subres);
+	MapReadbackBuffer(PagesCPU[readIndex], PagesNeeded, &subres);
 
 	u8 quadTreeDepth = (u8)Size(subres);
 
@@ -405,7 +392,7 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 		}
 	}
 
-	UnmapReadbackBuffer(PagesCPU[PagesCPUReadIndex]);
+	UnmapReadbackBuffer(PagesCPU[readIndex]);
 
 	GVirtualSMInfo.pagesMapped -= (u32)Size(DeprecatedMappings);
 
@@ -600,7 +587,6 @@ void Tick(float fDeltaTime) {
 	shadowmapMatrix = XMMatrixTranspose(shadowmapMatrix);
 
 	for (auto i : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
-		//ClearDepthStencil(depthCL, GetDSV(VirtualSM, i), CLEAR_DEPTH, (float)(GetResourceInfo(VirtualSM)->subresources_num - 1 - i) / 16.f);
 		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i), CLEAR_DEPTH);
 	}
 
@@ -688,18 +674,10 @@ void Tick(float fDeltaTime) {
 		subresource++;
 	}
 
-	CopyToReadbackBuffer(depthCL, PagesCPU[PagesCPUWriteIndex], PagesNeeded);
-	PagesCPUReady[PagesCPUWriteIndex] = GetFence(depthCL);
-	u32 nextWriteIndex = (PagesCPUWriteIndex + 1) % _countof(PagesCPU);
-	if (nextWriteIndex == PagesCPUReadIndex) {
-		WaitForCompletion(PagesCPUReady[PagesCPUReadIndex]);
+	CopyToReadbackBuffer(depthCL, PagesCPU[PagesWriteIndex], PagesNeeded);
+	PagesCPUReady[PagesWriteIndex] = GetFence(depthCL);
+	PagesWriteIndex = (PagesWriteIndex + 1) % _countof(PagesCPU);
 
-		Check(IsFenceCompleted(PagesCPUReady[PagesCPUReadIndex]));
-		u32 nextReadIndex = (PagesCPUReadIndex + 1) % _countof(PagesCPU);
-		WaitForCompletion(PagesCPUReady[nextReadIndex]);
-		PagesCPUReadIndex = nextReadIndex;
-	}
-	PagesCPUWriteIndex = nextWriteIndex;
 /*
 	SetShaderState(depthCL, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, CopyPS, PS_5_1), {});
 	SetRenderTarget(depthCL, 0, GetRTV(GetCurrentBackbuffer()));
@@ -736,7 +714,7 @@ void Tick(float fDeltaTime) {
 			SetTexture2D(depthCL, TEXT_("Shadowmap"), GetSRV(VirtualSM));
 			float3 f3LightDirection = toFloat3(lightDirection);
 			SetConstant(depthCL, TEXT_("LightDirection"), f3LightDirection);
-			SetTexture2D(depthCL, TEXT_("ShadowMipLookup"), GetSRV(PagesNeeded));
+			SetTexture2D(depthCL, TEXT_("ShadowMipLookup"), GetSRV(PagesNeededPrev));
 
 			buffer_location_t vb;
 			vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
@@ -756,6 +734,8 @@ void Tick(float fDeltaTime) {
 			DrawIndexed(depthCL, submesh.index_count, submesh.start_index, submesh.base_vertex);
 		}
 	}
+
+	CopyResource(depthCL, PagesNeededPrev, PagesNeeded);
 
 	u32 N = GetResourceInfo(PagesNeeded)->subresources_num;
 	u32 width = (u32)GetResourceInfo(PagesNeeded)->width;
