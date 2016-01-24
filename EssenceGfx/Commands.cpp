@@ -10,6 +10,9 @@
 #include <d3dcompiler.h>
 #include "d3dx12.h"
 
+#include "remotery\Remotery.h"
+
+#define GPU_PROFILING 1
 
 namespace Essence {
 
@@ -297,6 +300,83 @@ public:
 	}
 };
 
+class GPUProfiler {
+public:
+	struct sample_internal {
+		cstr	label;
+		u32		name_hash;
+		u32		timestamp_index_begin;
+		u32		timestamp_index_end;
+	};
+
+	struct query_readback_frame_fence {
+		u64 index_from;
+		u64 num;
+	};
+
+	// own-ptr
+	OwningComPtr<ID3D12QueryHeap>			QueryHeap;
+	// data
+	GPUQueue*								Queue;
+	u32										MaxTimestamps;
+	resource_handle							ReadbackBuffers;
+	std::atomic_uint64_t					QueryIssueIndex;
+	u64										QueryResolveIndex;
+
+	u64										QueueFrequency;
+	u64										QueueClockGpuCtr;
+	u64										QueueClockCpuCalibratedCtr;
+
+	CriticalSection							CS;
+
+	Ringbuffer<query_readback_frame_fence>	Fences;
+	Ringbuffer<sample_internal>				Samples;
+
+	static const u32						MaxPendingQueries = 64 * 1024;
+	static const u32						MaxQueuedFrames = 3;
+	u32										ReadIndex;
+	u32										WriteIndex;
+	GPUFenceHandle							ReadFences[MaxQueuedFrames];
+	resource_handle							Readback[MaxQueuedFrames];
+
+	GPUProfiler() :
+		Fences(),
+		Samples(),
+		QueryIssueIndex(0),
+		QueryResolveIndex(0)
+	{
+		MaxTimestamps = MaxPendingQueries;
+
+		D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
+		queryHeapDesc.Count = MaxPendingQueries;
+		queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+		VerifyHr(GD12Device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(QueryHeap.GetInitPtr())));
+
+		for (u32 i = 0; i < MaxQueuedFrames; ++i) {
+			Readback[i] = CreateBuffer(READBACK_MEMORY, MaxPendingQueries / MaxQueuedFrames, BUFFER_NO_FLAGS, "readback buffer");
+			ReadFences[i] = {};
+		}
+
+		ReadIndex = WriteIndex = 0;
+	}
+
+	void FreeMemory() {
+		Essence::FreeMemory(Fences);
+		Essence::FreeMemory(Samples);
+	}
+
+	~GPUProfiler() {
+		FreeMemory();
+	}
+
+	void AttachToQueue(GPUQueue* queue);
+	void Begin(gpu_sample *block);
+	void End(gpu_sample *block);
+
+	void ResolveFrameProfilingQueries(GPUCommandList* list);
+	void ReadbackAndFeedProfiler();
+};
+
 struct VertexFactory {
 	D3D12_INPUT_ELEMENT_DESC*	Elements;
 	u32							ElementsNum;
@@ -399,6 +479,7 @@ public:
 	OwningComPtr<ID3D12CommandQueue>	D12CommandQueue;
 	OwningComPtr<ID3D12Fence>			D12Fence;
 	OwningComPtr<ID3D12Fence>			D12SharedFence;
+	OwningPtr<GPUProfiler>				Profiler;
 
 	Hashmap<ResourceNameId, GPUCommandListPool*>		CommandListPools;
 	Hashmap<ResourceNameId, GPUCommandAllocatorPool*>	CommandAllocatorPools;
@@ -410,12 +491,14 @@ public:
 	u64					FenceValue;
 	u64					LastSignaledValue;
 	GPUFenceHandle		LastSignaledFence;
+	char				DebugName[64];
 
-	GPUQueue(GPUQueueTypeEnum type, u32 adapterIndex);
+	GPUQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex);
 	~GPUQueue();
 
 	u64					GetCompletedValue();
 	void				AdvanceFence();
+	void				EndFrame();
 };
 
 GPUFenceHandle GetLastSignaledFence(GPUQueue* queue) {
@@ -836,7 +919,7 @@ public:
 	}
 };
 
-GPUQueue::GPUQueue(GPUQueueTypeEnum type, u32 adapterIndex) :
+GPUQueue::GPUQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex) :
 	Type(type),
 	AdapterIndex(adapterIndex),
 	FenceValue(1),
@@ -856,6 +939,18 @@ GPUQueue::GPUQueue(GPUQueueTypeEnum type, u32 adapterIndex) :
 	SetDebugName(*D12CommandQueue, "CommandQueue");
 
 	SyncEvent = CreateEvent();
+
+	DebugName[0] = 0;
+	Verify(strncat_s(DebugName, GetString(name), _TRUNCATE) == 0);
+
+#if GPU_PROFILING
+	if (Type != COPY_QUEUE) {
+		decltype(*Profiler) pprofiler;
+		_new(pprofiler);
+		Profiler.Reset(pprofiler, GetMallocAllocator());
+		Profiler->AttachToQueue(this);
+	}
+#endif
 }
 
 GPUQueue::~GPUQueue() {
@@ -874,11 +969,27 @@ GPUQueue::~GPUQueue() {
 	DestroyEvent(SyncEvent);
 }
 
-ID3D12CommandQueue*		GetD12Queue(GPUQueue* queue) {
+void GPUQueue::EndFrame() {
+	for (auto allocatorsPool : CommandAllocatorPools) {
+		allocatorsPool.value->RecycleProcessed();
+	}
+
+#if GPU_PROFILING
+	if (Type != COPY_QUEUE) {
+		Profiler->ReadbackAndFeedProfiler();
+
+		auto cl = GetCommandList(this, NAME_("patchup"));
+		Profiler->ResolveFrameProfilingQueries(cl);
+		Execute(cl);
+	}
+#endif
+}
+
+ID3D12CommandQueue* GetD12Queue(GPUQueue* queue) {
 	return *queue->D12CommandQueue;
 }
 
-GPUCommandList*			GetCommandList(GPUQueue* queue, ResourceNameId usage) {
+GPUCommandList* GetCommandList(GPUQueue* queue, ResourceNameId usage) {
 	auto ppCommandListPool = Get(queue->CommandListPools, usage);
 	auto commandListPool = ppCommandListPool ? *ppCommandListPool : nullptr;
 	if (!commandListPool) {
@@ -905,18 +1016,179 @@ GPUCommandList*			GetCommandList(GPUQueue* queue, ResourceNameId usage) {
 	return commandList;
 }
 
-GPUFenceHandle			GetFence(GPUCommandList* list) {
+void GPUProfiler::AttachToQueue(GPUQueue* queue) {
+	Queue = queue;
+
+	VerifyHr(Queue->D12CommandQueue->GetTimestampFrequency(&QueueFrequency));
+	VerifyHr(Queue->D12CommandQueue->GetClockCalibration(&QueueClockGpuCtr, &QueueClockCpuCalibratedCtr));
+}
+
+void GPUProfiler::Begin(gpu_sample *sample) {
+	u64 index = QueryIssueIndex++;
+	rmt_PrepareGPUSample(sample->label, sample->rmt_name_hash);
+	sample->timestamp_index_begin = (u32)(index % MaxTimestamps);
+	sample->timestamp_index_end = -1;
+
+	sample->cl->D12CommandList->EndQuery(*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP, sample->timestamp_index_begin % MaxTimestamps);
+}
+
+void GPUProfiler::End(gpu_sample *sample) {
+	u64 index = QueryIssueIndex++;
+	sample->timestamp_index_end = (u32)(index % MaxTimestamps);
+
+	sample->cl->D12CommandList->EndQuery(*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP, sample->timestamp_index_end % MaxTimestamps);
+
+	sample_internal stored;
+	stored.label = sample->label;
+	stored.name_hash = *sample->rmt_name_hash;
+	stored.timestamp_index_begin = sample->timestamp_index_begin;
+	stored.timestamp_index_end = sample->timestamp_index_end;
+
+	ScopeLock lock(&CS);
+	PushBack(Samples, stored);
+}
+
+void GPUProfiler::ResolveFrameProfilingQueries(GPUCommandList* list) {
+	ScopeLock lock(&CS);
+
+	sample_internal guard;
+	guard.timestamp_index_begin = -1;
+	guard.timestamp_index_end = -1;
+
+	PushBack(Samples, guard);
+
+	auto index0 = (u32)(QueryResolveIndex % MaxTimestamps);
+	auto index1 = (u32)(QueryIssueIndex % MaxTimestamps);
+
+	if (index0 == index1) {
+		return;
+	}
+
+	if (index1 > index0) {
+		u32 size = (u32)(index1 - index0) * sizeof(u64);
+
+		list->D12CommandList->ResolveQueryData(
+			*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP,
+			index0, index1 - index0, GetResourceInfo(Readback[WriteIndex])->resource, 0);
+	}
+	else {
+		u32 size = (u32)((MaxTimestamps - index0) + index1) * sizeof(u64);
+
+		list->D12CommandList->ResolveQueryData(
+			*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP,
+			index0, (u32)(MaxTimestamps - index0), GetResourceInfo(Readback[WriteIndex])->resource, 0);
+		list->D12CommandList->ResolveQueryData(
+			*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP,
+			0, index1, GetResourceInfo(Readback[WriteIndex])->resource, sizeof(u64)*(MaxTimestamps - index0));
+	}
+
+	query_readback_frame_fence fence;
+	fence.index_from = index0;
+	fence.num = QueryIssueIndex - QueryResolveIndex;
+	PushBack(Fences, fence);
+
+	ReadFences[WriteIndex] = GetFence(list);
+	WriteIndex = (WriteIndex + 1) % MaxQueuedFrames;
+}
+
+void GPUProfiler::ReadbackAndFeedProfiler() {
+	if (WriteIndex == ReadIndex && !IsFenceCompleted(ReadFences[ReadIndex])) {
+		WaitForCompletion(ReadFences[ReadIndex]);
+	}
+
+	while (IsFenceCompleted(ReadFences[ReadIndex]) && Size(Fences)) {
+		auto fence = Front(Fences);
+		PopFront(Fences);
+
+		void* mappedPtr;
+		auto readbackBuffer = GetResourceInfo(Readback[ReadIndex])->resource;
+		D3D12_RANGE mappedRange;
+		mappedRange.Begin = 0;
+		mappedRange.End = sizeof(u64) * fence.num;
+		VerifyHr(readbackBuffer->Map(0, &mappedRange, &mappedPtr));
+
+		u64* timestamps = (u64*)mappedPtr;
+
+		struct timing_t {
+			cstr	label;
+			u32		name_hash;
+			u64		start_clocks;
+			u64		end_clocks;
+		};
+
+		Array<timing_t> timings(GetThreadScratchAllocator());
+		Reserve(timings, Size(Samples));
+
+		u64 CPUFrequency = rmt_GetCPUFrequency();
+		double usScaling = 1000000.0 / CPUFrequency;
+
+		while (Size(Samples)) {
+			auto gpu_sample = Front(Samples);
+			PopFront(Samples);
+
+			if (gpu_sample.timestamp_index_begin == -1 && gpu_sample.timestamp_index_end == -1) {
+				// guard block, break loop
+				break;
+			}
+
+			// read from mapped
+			u64 gpu_begin_ctr = timestamps[gpu_sample.timestamp_index_begin - fence.index_from];
+			u64 gpu_end_ctr = timestamps[gpu_sample.timestamp_index_end - fence.index_from];
+
+			timing_t timing;
+
+			timing.label = gpu_sample.label;
+			timing.name_hash = gpu_sample.name_hash;
+			timing.start_clocks = (gpu_begin_ctr - QueueClockGpuCtr) * CPUFrequency / QueueFrequency;// +QueueClockCpuCalibratedCtr;
+			timing.end_clocks = (gpu_end_ctr - QueueClockGpuCtr) * CPUFrequency / QueueFrequency;// +QueueClockCpuCalibratedCtr;
+
+			PushBack(timings, timing);
+		}
+
+		D3D12_RANGE writtenRange;
+		writtenRange.Begin = 1;
+		writtenRange.End = 0;
+		readbackBuffer->Unmap(0, &writtenRange);
+
+		Array<u32> endingIndices(GetThreadScratchAllocator());
+		Reserve(endingIndices, Size(timings));
+		for (u32 i : MakeRange((u32)Size(timings))) {
+			PushBack(endingIndices, i);
+		}
+
+		quicksort(timings.DataPtr, 0, Size(timings), [&](timing_t const& a, timing_t const& b) { return a.start_clocks < b.start_clocks; });
+		quicksort(endingIndices.DataPtr, 0, Size(endingIndices), [&](u32 a, u32 b) { return timings[a].end_clocks < timings[b].end_clocks; });
+
+		u32 beginIndex = 0;
+		u32 endIndex = 0;
+		u32 N = (u32)Size(timings);
+		while (endIndex < N) {
+			if (beginIndex < N && timings[beginIndex].start_clocks <= timings[endingIndices[endIndex]].end_clocks) {
+				rmt_BeginGPUSample(timings[beginIndex].label, timings[beginIndex].name_hash, (u64)(timings[beginIndex].start_clocks * usScaling));
+				++beginIndex;
+			}
+			else{
+				rmt_EndGPUSample((u64)(timings[endingIndices[endIndex]].end_clocks * usScaling), Queue->DebugName);
+				++endIndex;
+			}
+		}
+
+		ReadIndex = (ReadIndex + 1) % MaxQueuedFrames;
+	}
+}
+
+GPUFenceHandle GetFence(GPUCommandList* list) {
 	Check(list->State == CL_RECORDING || list->State == CL_CLOSED);
 	return list->Fence;
 }
 
-GPUFenceHandle			GetFence(GPUQueue* queue) {
+GPUFenceHandle GetFence(GPUQueue* queue) {
 	return queue->LastSignaledFence;
 }
 
 void ResetRootBindingMappings(GPUCommandList* list);
 
-void					Close(GPUCommandList* list) {
+void Close(GPUCommandList* list) {
 	Check(list->State == CL_RECORDING);
 	list->State = CL_CLOSED;
 
@@ -929,7 +1201,7 @@ void					Close(GPUCommandList* list) {
 
 const u32 RESOURCE_STATE_UNKNOWN = 0xFFFFFFFF;
 
-void					Execute(GPUCommandList* list) {
+void Execute(GPUCommandList* list) {
 	if (list->State == CL_RECORDING) {
 		Close(list);
 	}
@@ -1298,9 +1570,9 @@ void					Execute(GPUCommandList* list) {
 	}
 }
 
-GPUQueue*		CreateQueue(GPUQueueTypeEnum type, u32 adapterIndex) {
+GPUQueue*		CreateQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex) {
 	GPUQueue* queue;
-	_new(queue, type, adapterIndex);
+	_new(queue, name, type, adapterIndex);
 	PushBack(GPUQueues, queue);
 	return queue;
 }
@@ -1324,9 +1596,7 @@ void EndCommandsFrame(GPUQueue* mainQueue, u32 limitGpuBufferedFrames) {
 	}
 
 	for (auto queue : GPUQueues) {
-		for (auto allocatorsPool : queue->CommandAllocatorPools) {
-			allocatorsPool.value->RecycleProcessed();
-		}
+		queue->EndFrame();
 	}
 
 	GpuDescriptorsAllocator.FreeTemporaryAllocations();
@@ -1508,6 +1778,24 @@ void CopyResource(GPUCommandList* list, resource_handle dst, resource_handle src
 	list->ResourcesStateTracker.Transition(Slice(src), D3D12_RESOURCE_STATE_COPY_SOURCE);
 	list->ResourcesStateTracker.FireBarriers();
 	list->D12CommandList->CopyResource(GetResourceFast(dst)->resource, GetResourceFast(src)->resource);
+}
+
+gpu_sample BeginProfiling(GPUCommandList* list, cstr label, u32* rmt_name_hash) {
+	gpu_sample sample = {};
+#if GPU_PROFILING
+	sample.label = label;
+	sample.rmt_name_hash = rmt_name_hash;
+	sample.cl = list;
+	list->Queue->Profiler->Begin(&sample);
+#endif
+	return sample;
+}
+
+void EndProfiling(GPUCommandList* list, gpu_sample* sample) {
+#if GPU_PROFILING
+	list->Queue->Profiler->End(sample);
+#endif
+	sample = {};
 }
 
 void ClearRenderTarget(GPUCommandList* list, resource_rtv_t rtv, float4 color) {

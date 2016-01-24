@@ -671,7 +671,7 @@ resource_handle CreateReadbackBufferForResource(resource_handle targetedResource
 	u32 subresourcesNum = GetResourceInfo(targetedResource)->subresources_num;
 	GD12Device->GetCopyableFootprints(&desc, 0, subresourcesNum, 0, nullptr, nullptr, nullptr, &readbackBufferSize);
 
-	return CreateBuffer(READBACK_MEMORY, readbackBufferSize, 0, BUFFER_NO_FLAGS, "readback heap");
+	return CreateBuffer(READBACK_MEMORY, readbackBufferSize, BUFFER_NO_FLAGS, "readback heap");
 }
 
 void MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<subresource_read_info_t> *outReadInfo) {
@@ -782,7 +782,7 @@ void CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dst, u32 s
 	auto desc = ResourcesTable[dst.handle].desc;
 	GD12Device->GetCopyableFootprints(&desc, 0, subresourcesNum, 0, layouts.DataPtr, numRows.DataPtr, rowSizes.DataPtr, &uploadBufferSize);
 
-	auto tmpUploadHeap = CreateBuffer(UPLOAD_MEMORY, uploadBufferSize, 0, BUFFER_NO_FLAGS, "upload heap");
+	auto tmpUploadHeap = CreateBuffer(UPLOAD_MEMORY, uploadBufferSize, BUFFER_NO_FLAGS, "upload heap");
 
 	auto srcResource = GetResourceFast(tmpUploadHeap)->resource;
 	byte* dataPtr;
@@ -830,7 +830,7 @@ void CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* d
 	CopyFromCpuToSubresources(list, Slice(dstBuffer), 1, &copyInfo);
 }
 
-resource_handle CreateBuffer(ResourceHeapType heapType, u64 size, u64 stride, BufferFlags flags, const char* debugName) {
+resource_handle CreateBuffer(ResourceHeapType heapType, u64 size, BufferFlags flags, const char* debugName) {
 	
 	D3D12_RESOURCE_DESC desc = (D3D12_RESOURCE_DESC)CD3DX12_RESOURCE_DESC::Buffer(size, D3D12_RESOURCE_FLAG_NONE);
 

@@ -67,9 +67,8 @@ documented just below this comment.
 #define RMT_USE_OPENGL 0
 #endif
 
-// Initially use POSIX thread names to name threads instead of Thread0, 1, ...
-#ifndef RMT_USE_POSIX_THREADNAMES
-#define RMT_USE_POSIX_THREADNAMES 0
+#ifndef RMT_CUSTOM_GPU 
+#define RMT_CUSTOM_GPU 1
 #endif
 
 
@@ -268,6 +267,9 @@ typedef enum rmtError
 // Can call remotery functions on a null pointer
 // TODO: Can embed extern "C" in these macros?
 
+#define rmt_GetCPUFrequency()                                                       \
+    RMT_OPTIONAL_RET(RMT_ENABLED, _rmt_GetCPUFrequency(), 0ull )
+
 #define rmt_Settings()                                                              \
     RMT_OPTIONAL_RET(RMT_ENABLED, _rmt_Settings(), NULL )
 
@@ -308,7 +310,6 @@ typedef void* (*rmtReallocPtr)(void* mm_context, void* ptr, rmtU32 size);
 typedef void (*rmtFreePtr)(void* mm_context, void* ptr);
 typedef void (*rmtInputHandlerPtr)(const char* text, void* context);
 
-
 // Struture to fill in to modify Remotery default settings
 typedef struct rmtSettings
 {
@@ -341,6 +342,15 @@ typedef struct rmtSettings
 
     rmtPStr logFilename;
 } rmtSettings;
+
+#define rmt_PrepareGPUSample(name, hash)													\
+	RMT_OPTIONAL(RMT_ENABLED, _rmt_PrepareGPUSample(#name, hash))
+
+#define rmt_BeginGPUSample(name, hash, us_start)                                    \
+    RMT_OPTIONAL(RMT_ENABLED, _rmt_BeginGPUSample(name, hash, us_start))           \
+
+#define rmt_EndGPUSample(us_end, queue_name)                                         \
+    RMT_OPTIONAL(RMT_ENABLED, _rmt_EndGPUSample(us_end, queue_name))
 
 
 // Structure to fill in when binding CUDA to Remotery
@@ -518,6 +528,7 @@ struct rmt_EndOpenGLSampleOnScopeExit
 extern "C" {
 #endif
 
+RMT_API rmtU64 _rmt_GetCPUFrequency( void );
 RMT_API rmtSettings* _rmt_Settings( void );
 RMT_API enum rmtError _rmt_CreateGlobalInstance(Remotery** remotery);
 RMT_API void _rmt_DestroyGlobalInstance(Remotery* remotery);
@@ -527,6 +538,12 @@ RMT_API void _rmt_SetCurrentThreadName(rmtPStr thread_name);
 RMT_API void _rmt_LogText(rmtPStr text);
 RMT_API void _rmt_BeginCPUSample(rmtPStr name, rmtU32* hash_cache);
 RMT_API void _rmt_EndCPUSample(void);
+
+#if RMT_CUSTOM_GPU
+RMT_API void _rmt_PrepareGPUSample(rmtPStr name, rmtU32* hash_cache);
+RMT_API void _rmt_BeginGPUSample(rmtPStr name, rmtU32 hash_cache, rmtU64);
+RMT_API void _rmt_EndGPUSample(rmtU64, rmtPStr);
+#endif
 
 #if RMT_USE_CUDA
 RMT_API void _rmt_BindCUDA(const rmtCUDABind* bind);

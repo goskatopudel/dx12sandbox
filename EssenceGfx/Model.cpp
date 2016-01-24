@@ -69,9 +69,9 @@ void LoadModel(ResourceNameId name) {
 	auto copyCommands = GetCommandList(GGPUCopyQueue, NAME_("Copy"));
 
 	model_t model = {};
-	model.vertex_buffer = CreateBuffer(DEFAULT_MEMORY, Size(Vertices) * sizeof(mesh_vertex_t), sizeof(mesh_vertex_t), ALLOW_VERTEX_BUFFER, Format("vertex buffer of %s", (const char*)GetString(name)));
+	model.vertex_buffer = CreateBuffer(DEFAULT_MEMORY, Size(Vertices) * sizeof(mesh_vertex_t), ALLOW_VERTEX_BUFFER, Format("vertex buffer of %s", (const char*)GetString(name)));
 	CopyToBuffer(copyCommands, model.vertex_buffer, Vertices.DataPtr, Size(Vertices) * sizeof(mesh_vertex_t));
-	model.index_buffer = CreateBuffer(DEFAULT_MEMORY, modelData.indicesNum * sizeof(u32), sizeof(u32), ALLOW_INDEX_BUFFER, Format("index buffer of %s", (const char*)GetString(name)));
+	model.index_buffer = CreateBuffer(DEFAULT_MEMORY, modelData.indicesNum * sizeof(u32), ALLOW_INDEX_BUFFER, Format("index buffer of %s", (const char*)GetString(name)));
 	CopyToBuffer(copyCommands, model.index_buffer, modelData.indices, modelData.indicesNum * sizeof(u32));
 	model.vertices_num = modelData.verticesNum;
 	model.indices_num = modelData.indicesNum;

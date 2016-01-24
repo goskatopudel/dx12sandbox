@@ -59,24 +59,6 @@ enum DsvAccessEnum {
 	DSV_NO_STENCIL_ACCESS_COUNT = DSV_READ_ONLY_STENCIL
 };
 
-struct subresource_read_info_t {
-	void*		data;
-	u32			row_pitch;
-	u32			width;
-	u32			height;
-	DXGI_FORMAT	format;
-};
-
-resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
-void			CopyFromCpuToSubresources(class GPUQueue* queue, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData);
-resource_handle CreateReadbackBufferForResource(resource_handle targetedResource);
-void			CopyToReadbackBuffer(GPUCommandList* list, resource_handle dst, resource_handle src);
-void			UnmapReadbackBuffer(resource_handle buffer);
-void			MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<subresource_read_info_t> *outReadInfo);
-
-void	InitResources();
-void	ShutdownResources();
-
 enum ResourceCreationType {
 	UNKNOWN_RESOURCE,
 	COMMITED_RESOURCE,
@@ -89,6 +71,32 @@ enum ResourceHeapType {
 	UPLOAD_MEMORY,
 	READBACK_MEMORY
 };
+
+enum BufferFlags {
+	BUFFER_NO_FLAGS = 0,
+	ALLOW_VERTEX_BUFFER = 1,
+	ALLOW_INDEX_BUFFER = 2
+};
+
+struct subresource_read_info_t {
+	void*		data;
+	u32			row_pitch;
+	u32			width;
+	u32			height;
+	DXGI_FORMAT	format;
+};
+
+resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
+resource_handle			CreateBuffer(ResourceHeapType heapType, u64 size, BufferFlags flags, const char* debugName);
+void					CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size);
+void			CopyFromCpuToSubresources(class GPUQueue* queue, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData);
+resource_handle CreateReadbackBufferForResource(resource_handle targetedResource);
+void			CopyToReadbackBuffer(GPUCommandList* list, resource_handle dst, resource_handle src);
+void			UnmapReadbackBuffer(resource_handle buffer);
+void			MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<subresource_read_info_t> *outReadInfo);
+
+void	InitResources();
+void	ShutdownResources();
 
 struct resource_t {
 	ID3D12Resource*				resource;
@@ -174,15 +182,6 @@ inline resource_slice_t Slice(resource_handle resource, u32 subresource = 0) {
 	slice.subresource = subresource;
 	return slice;
 }
-
-enum BufferFlags {
-	BUFFER_NO_FLAGS = 0,
-	ALLOW_VERTEX_BUFFER = 1,
-	ALLOW_INDEX_BUFFER = 2
-};
-
-resource_handle			CreateBuffer(ResourceHeapType heapType, u64 size, u64 stride, BufferFlags flags, const char* debugName);
-void					CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size);
 
 inline void* HandleToImGuiTexID(resource_handle handle) {
 	u64 val = 0;

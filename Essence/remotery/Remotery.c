@@ -245,6 +245,11 @@ typedef struct
     double counter_scale;
 } usTimer;
 
+rmtU64 GCpuFrequency;
+
+RMT_API rmtU64 _rmt_GetCPUFrequency( void ) {
+	return GCpuFrequency;
+}
 
 static void usTimer_Init(usTimer* timer)
 {
@@ -256,6 +261,8 @@ static void usTimer_Init(usTimer* timer)
         // Calculate the scale from performance counter to microseconds
         QueryPerformanceFrequency(&performance_frequency);
         timer->counter_scale = 1000000.0 / performance_frequency.QuadPart;
+
+		GCpuFrequency = performance_frequency.QuadPart;
 
         // Record the offset for each read of the counter
         QueryPerformanceCounter(&timer->counter_start);
@@ -3306,9 +3313,7 @@ static rmtError json_CloseArray(Buffer* buffer)
 enum SampleType
 {
     SampleType_CPU,
-    SampleType_CUDA,
-    SampleType_D3D11,
-    SampleType_OpenGL,
+    SampleType_GPU,
     SampleType_Count,
 };
 
@@ -3735,26 +3740,30 @@ static rmtError ThreadSampler_Push(ThreadSampler* ts, SampleTree* tree, rmtPStr 
     return SampleTree_Push(tree, name, name_hash, sample);
 }
 
-
-static rmtBool ThreadSampler_Pop(ThreadSampler* ts, MessageQueue* queue, Sample* sample)
+rmtBool ThreadSampler_Pop_(ThreadSampler* ts, MessageQueue* queue, Sample* sample, rmtPStr thread_name)
 {
-    SampleTree* tree = ts->sample_trees[sample->type];
-    SampleTree_Pop(tree, sample);
+	SampleTree* tree = ts->sample_trees[sample->type];
+	SampleTree_Pop(tree, sample);
 
-    // Are we back at the root?
-    if (tree->current_parent == tree->root)
-    {
-        // Disconnect all samples from the root and pack in the chosen message queue
-        Sample* root = tree->root;
-        root->first_child = NULL;
-        root->last_child = NULL;
-        root->nb_children = 0;
-        AddSampleTreeMessage(queue, sample, tree->allocator, ts->name, ts);
+	// Are we back at the root?
+	if (tree->current_parent == tree->root)
+	{
+		// Disconnect all samples from the root and pack in the chosen message queue
+		Sample* root = tree->root;
+		root->first_child = NULL;
+		root->last_child = NULL;
+		root->nb_children = 0;
+		AddSampleTreeMessage(queue, sample, tree->allocator, thread_name, ts);
 
-        return RMT_TRUE;
-    }
+		return RMT_TRUE;
+	}
 
-    return RMT_FALSE;
+	return RMT_FALSE;
+}
+
+rmtBool ThreadSampler_Pop(ThreadSampler* ts, MessageQueue* queue, Sample* sample)
+{
+	return ThreadSampler_Pop_(ts, queue, sample, ts->name);
 }
 
 
@@ -3913,12 +3922,6 @@ static rmtError json_SampleTree(Buffer* buffer, Msg_SampleTree* msg)
     // Add any sample types as a thread name post-fix to ensure they get their own viewer
     thread_name[0] = 0;
     strncat_s(thread_name, sizeof(thread_name), msg->thread_name, strnlen_s(msg->thread_name, 64));
-    if (root_sample->type == SampleType_CUDA)
-        strncat_s(thread_name, sizeof(thread_name), " (CUDA)", 7);
-    if (root_sample->type == SampleType_D3D11)
-        strncat_s(thread_name, sizeof(thread_name), " (D3D11)", 8);
-    if (root_sample->type == SampleType_OpenGL)
-        strncat_s(thread_name, sizeof(thread_name), " (OpenGL)", 9);
 
     // Get digest hash of samples so that viewer can efficiently rebuild its tables
     GetSampleDigest(root_sample, &digest_hash, &nb_samples);
@@ -4317,7 +4320,6 @@ static void* CRTRealloc(void* mm_context, void* ptr, rmtU32 size)
     return realloc(ptr, size);
 }
 
-
 RMT_API rmtSettings* _rmt_Settings(void)
 {
     // Default-initialize on first call
@@ -4593,6 +4595,99 @@ RMT_API void _rmt_EndCPUSample(void)
         ThreadSampler_Pop(ts, g_Remotery->mq_to_rmt_thread, sample);
     }
 }
+
+#if RMT_CUSTOM_GPU
+
+RMT_API void _rmt_PrepareGPUSample(rmtPStr name, rmtU32* hash_cache)
+{
+	GetNameHash(name, hash_cache);
+}
+
+
+static rmtError GPUSample_Constructor(Sample* sample)
+{
+	assert(sample != NULL);
+
+	ObjectLink_Constructor((ObjectLink*)sample);
+
+	sample->type = SampleType_GPU;
+	sample->size_bytes = sizeof(Sample);
+	sample->name = NULL;
+	sample->name_hash = 0;
+	sample->unique_id = 0;
+	sample->unique_id_html_colour[0] = '#';
+	sample->unique_id_html_colour[1] = 0;
+	sample->unique_id_html_colour[7] = 0;
+	sample->parent = NULL;
+	sample->first_child = NULL;
+	sample->last_child = NULL;
+	sample->next_sibling = NULL;
+	sample->nb_children = 0;
+	sample->us_start = 0;
+	sample->us_end = 0;
+
+	return RMT_ERROR_NONE;
+}
+
+
+static void GPUSample_Destructor(Sample* sample)
+{
+	RMT_UNREFERENCED_PARAMETER(sample);
+}
+
+
+RMT_API void _rmt_BeginGPUSample(rmtPStr name, rmtU32 hash_cache, rmtU64 us_start)
+{
+	// 'hash_cache' stores a pointer to a sample name's hash value. Internally this is used to identify unique callstacks and it
+	// would be ideal that it's not recalculated each time the sample is used. This can be statically cached at the point
+	// of call or stored elsewhere when dynamic names are required.
+	//
+	// If 'hash_cache' is NULL then this call becomes more expensive, as it has to recalculate the hash of the name.
+
+	ThreadSampler* ts;
+
+	if (g_Remotery == NULL)
+		return;
+
+	// TODO: Time how long the bits outside here cost and subtract them from the parent
+
+	if (Remotery_GetThreadSampler(g_Remotery, &ts) == RMT_ERROR_NONE)
+	{
+		Sample* sample;
+		rmtU32 name_hash = GetNameHash(name, &hash_cache);
+
+		rmtError error;
+		SampleTree** tree = &ts->sample_trees[SampleType_GPU];
+		if (*tree == NULL)
+		{
+			New_3(SampleTree, *tree, sizeof(Sample), (ObjConstructor)GPUSample_Constructor, (ObjDestructor)GPUSample_Destructor);
+			if (error != RMT_ERROR_NONE)
+				return;
+		}
+
+		
+		if (ThreadSampler_Push(ts, *tree, name, name_hash, &sample) == RMT_ERROR_NONE) {
+			sample->us_start = us_start;
+		}
+	}
+}
+
+RMT_API void _rmt_EndGPUSample(rmtU64 us_end, rmtPStr queue_name)
+{
+	ThreadSampler* ts;
+
+	if (g_Remotery == NULL)
+		return;
+
+	if (Remotery_GetThreadSampler(g_Remotery, &ts) == RMT_ERROR_NONE)
+	{
+		Sample* sample = ts->sample_trees[SampleType_GPU]->current_parent;
+		sample->us_end = us_end;
+		ThreadSampler_Pop_(ts, g_Remotery->mq_to_rmt_thread, sample, queue_name);
+	}
+}
+
+#endif
 
 
 

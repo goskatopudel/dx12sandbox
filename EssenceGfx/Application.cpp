@@ -82,8 +82,8 @@ void InitApplication(u32 windowWidth, u32 windowHeight, int vsync, ApplicationFl
 	InitRenderingEngines();
 	InitResources();
 
-	GGPUMainQueue = CreateQueue(DIRECT_QUEUE);
-	GGPUCopyQueue = CreateQueue(COPY_QUEUE);
+	GGPUMainQueue = CreateQueue(TEXT_("3d_engine"), DIRECT_QUEUE);
+	GGPUCopyQueue = CreateQueue(TEXT_("copy_engine"), COPY_QUEUE);
 
 	CreateSwapChain(GetD12Queue(GGPUMainQueue), 3);
 

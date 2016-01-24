@@ -17,10 +17,6 @@ CACHE_ALIGN	abool		RunWorkers;
 
 CriticalSection			JobQueueCS;
 Ringbuffer<Job*>		JobQueue;
-//std::mutex				WorkMutex;
-//std::condition_variable WorkCondition;
-//std::mutex				CompletionMutex;
-//std::condition_variable CompletionCondition;
 
 Array<Job*>				DeletionList;
 CriticalSection			DeletionListCS;

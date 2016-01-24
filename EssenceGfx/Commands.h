@@ -33,7 +33,7 @@ void						WaitForCompletion();
 void						InitRenderingEngines();
 void						ShutdownRenderingEngines();
 
-GPUQueue*					CreateQueue(GPUQueueTypeEnum type = DIRECT_QUEUE, u32 adapterIndex = 0);
+GPUQueue*					CreateQueue(TextId name, GPUQueueTypeEnum type = DIRECT_QUEUE, u32 adapterIndex = 0);
 ID3D12CommandQueue*			GetD12Queue(GPUQueue* queue);
 void						WaitForCompletion(GPUQueue* queue);
 
@@ -63,6 +63,18 @@ enum ClearDepthFlagEnum {
 	CLEAR_STENCIL = 2,
 	CLEAR_ALL = 3 
 };
+
+
+struct gpu_sample {
+	cstr	label;
+	u32*	rmt_name_hash;
+	u32		timestamp_index_begin;
+	u32		timestamp_index_end;
+	GPUCommandList*	cl;
+};
+
+gpu_sample					BeginProfiling(GPUCommandList*, cstr label, u32* rmt_name_hash);
+void						EndProfiling(GPUCommandList*, gpu_sample*);
 void						ClearDepthStencil(GPUCommandList*, resource_dsv_t, ClearDepthFlagEnum flags = CLEAR_ALL, float depth = 1.f, u8 stencil = 0, u32 numRects = 0, D3D12_RECT* rects = nullptr);
 void						ClearUnorderedAccess(GPUCommandList*, resource_uav_t);
 void						SetShaderState	(GPUCommandList*, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory);

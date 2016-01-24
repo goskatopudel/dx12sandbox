@@ -45,11 +45,9 @@ template<class T> inline void make_delete(T*& ptr, IAllocator &allocator);
 template<class T, class... _Types> inline void _new(T*& ptr, _Types &&... _args);
 template<class T> inline void _delete(T*& ptr);
 
-inline void *align_forward(void *p, size_t align);
-inline void *pointer_add(void *p, size_t bytes);
-inline const void *pointer_add(const void *p, size_t bytes);
-inline void *pointer_sub(void *p, size_t bytes);
-inline const void *pointer_sub(const void *p, size_t bytes);
+inline void *align_forward(const void *p, size_t alignment);
+inline void *pointer_add(const void *p, size_t bytes);
+inline void *pointer_sub(const void *p, size_t bytes);
 inline size_t padded_size(size_t size, size_t align);
 inline size_t pointer_sub(const void *a, const void *b);
 
@@ -93,31 +91,22 @@ template<class T> inline void _delete(T*& ptr) {
 	make_delete(ptr, GetMallocAllocator());
 }
 
-inline void *align_forward(void *p, size_t align) {
+inline void *align_forward(const void *p, size_t alignment) {
 	uintptr_t pi = uintptr_t(p);
-	const size_t mod = pi % align;
-	pi += (mod > 0) ? (align - mod) : 0;
+	pi = (pi + alignment - 1) & ~(alignment - 1);
 	return (void *) pi;
 }
 
-inline void *pointer_add(void *p, size_t bytes) {
-	return (void*) ((char *) p + bytes);
+inline void *pointer_add(const void *p, size_t bytes) {
+	return (void*) ((const char *) p + bytes);
 }
 
-inline const void *pointer_add(const void *p, size_t bytes) {
-	return (const void*) ((const char *) p + bytes);
+inline void *pointer_sub(const void *p, size_t bytes) {
+	return (void*) ((const char *) p - bytes);
 }
 
-inline void *pointer_sub(void *p, size_t bytes) {
-	return (void*) ((char *) p - bytes);
-}
-
-inline const void *pointer_sub(const void *p, size_t bytes) {
-	return (const void*) ((const char *) p - bytes);
-}
-
-inline size_t padded_size(size_t size, size_t align) {
-	return (size + (align - 1)) & ~(align - 1);
+inline size_t padded_size(size_t size, size_t alignment) {
+	return (size + alignment - 1) & ~(alignment - 1);
 }
 
 inline size_t pointer_sub(const void *a, const void *b) {
