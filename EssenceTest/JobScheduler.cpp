@@ -92,12 +92,14 @@ template<typename T, u32 Size>
 struct TSRingbuffer {
 	CACHE_ALIGN i64 volatile ReadIndex;
 	CACHE_ALIGN i64 volatile WriteIndex;
+	CACHE_ALIGN i64 volatile WriteCommitedIndex;
 	CACHE_ALIGN T*	Data;
 
-	TSRingbuffer() : ReadIndex(0), WriteIndex(0), Data(nullptr) {}
+	TSRingbuffer() : ReadIndex(0), WriteIndex(0), WriteCommitedIndex(0), Data(nullptr) {}
 
 	void InitMemory() {
 		Data = (T*)GetMallocAllocator()->Allocate(sizeof(T) * Size, alignof(T));
+		Check(Data);
 	}
 
 	void FreeMemory() {
@@ -113,15 +115,17 @@ struct TSRingbuffer {
 
 	void Push(T val) {
 		assert(ReadIndex + Size != WriteIndex);
-		Data[InterlockedIncrement64(&WriteIndex) % Size] = val;
+		i64 writeIndex = InterlockedIncrement64(&WriteIndex) - 1;
+		Data[writeIndex % Size] = val;
+		InterlockedIncrement64(&WriteCommitedIndex);
 	}
 
 	bool Pop(T *outVal) {
 		i64 read = ReadIndex;
-		while (read + 1 <= WriteIndex) {
+		while (read + 1 <= WriteCommitedIndex) {
 			i64 prev = InterlockedCompareExchange64(&ReadIndex, read + 1, read);
 			if (prev == read) {
-				*outVal = Data[(prev + 1) % Size];
+				*outVal = Data[read % Size];
 				return true;
 			}
 			read = prev;
@@ -142,9 +146,8 @@ struct counter_t {
 	fiber_ptr		fiber;
 };
 
-thread_local fiber_ptr								TlsThreadFiber;
-
 static const u32									MAX_WORKERS = 32;
+fiber_ptr											WorkerThreadFibers[MAX_WORKERS];
 u32													WorkersNum;
 volatile u32										ActiveWorkerThreadsNum;
 CACHE_ALIGN	volatile u32							Suspended;
@@ -208,8 +211,7 @@ void InitJobScheduler() {
 		WorkerThreads[i + 1] = CreateThread(nullptr, 0, worker_thread_main, nullptr, 0, nullptr);
 	}
 
-	ConvertThreadToFiber(nullptr);
-	TlsThreadFiber = GetCurrentFiber();
+	Verify(ConvertThreadToFiber(nullptr));
 }
 
 void ShutdownJobScheduler() {
@@ -219,10 +221,7 @@ void ShutdownJobScheduler() {
 		WorkCondition.WakeAll();
 	}
 
-	if (GetCurrentFiber() != TlsThreadFiber) {
-		SwitchToFiber(TlsThreadFiber);
-	}
-	ConvertFiberToThread();
+	Verify(ConvertFiberToThread());
 
 	while (ActiveWorkerThreadsNum > 0) {
 		_mm_pause();
@@ -232,8 +231,8 @@ void ShutdownJobScheduler() {
 
 	for (u32 i = 0; i < WorkersNum + 1; ++i) {
 		if (WorkerThreads[i] != currentThread) {
-			WaitForSingleObject(WorkerThreads[i], INFINITE);
 			CloseHandle(WorkerThreads[i]);
+			WaitForSingleObject(WorkerThreads[i], INFINITE);
 		}
 	}
 
@@ -243,14 +242,13 @@ void ShutdownJobScheduler() {
 }
 
 DWORD WINAPI worker_thread_main(void* pVoidParams) {
-	InterlockedIncrement(&ActiveWorkerThreadsNum);
-	ConvertThreadToFiber(nullptr);
-	TlsThreadFiber = GetCurrentFiber();
+	Verify(ConvertThreadToFiber(nullptr));
+	u32 workerIndex = InterlockedIncrement(&ActiveWorkerThreadsNum) - 1;
+	WorkerThreadFibers[workerIndex] = GetCurrentFiber();
 
 	SwitchToFiber(GetNextMainFiber());
 
-	ConvertFiberToThread();
-	InterlockedDecrement(&ActiveWorkerThreadsNum);
+	Verify(ConvertFiberToThread());
 
 	return 0;
 }
@@ -322,9 +320,9 @@ void WINAPI fiber_main(void* pVoidParams) {
 			}
 		}
 	}
-	if (GetCurrentFiber() != TlsThreadFiber) {
-		SwitchToFiber(TlsThreadFiber);
-	}
+	
+	u32 workerIndex = InterlockedDecrement(&ActiveWorkerThreadsNum);
+	SwitchToFiber(WorkerThreadFibers[workerIndex]);
 }
 
 }

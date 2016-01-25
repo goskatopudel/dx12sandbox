@@ -459,6 +459,7 @@ void root2(void* pVoidParams) {
 }
 
 int main(int argc, char * argv[]) {
+
 	/*TestArray(argc, argv);
 	TestHashmap(argc, argv);
 	TestCollections(argc, argv);
@@ -481,6 +482,8 @@ int main(int argc, char * argv[]) {
 	WaitForCompletion(ScheduleJobs(&job, 1));
 
 	ShutdownJobScheduler();
+
+	OutputDebugStringA("scheduler shut");
 
 	Essence::ShutdownMemoryAllocators();
 
