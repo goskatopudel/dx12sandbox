@@ -64,17 +64,8 @@ enum ClearDepthFlagEnum {
 	CLEAR_ALL = 3 
 };
 
-
-struct gpu_sample {
-	cstr	label;
-	u32*	rmt_name_hash;
-	u32		timestamp_index_begin;
-	u32		timestamp_index_end;
-	GPUCommandList*	cl;
-};
-
-gpu_sample					BeginProfiling(GPUCommandList*, cstr label, u32* rmt_name_hash);
-void						EndProfiling(GPUCommandList*, gpu_sample*);
+void						GPUBeginProfiling(GPUCommandList*, cstr label, u32* rmt_name_hash);
+void						GPUEndProfiling(GPUCommandList*);
 void						ClearDepthStencil(GPUCommandList*, resource_dsv_t, ClearDepthFlagEnum flags = CLEAR_ALL, float depth = 1.f, u8 stencil = 0, u32 numRects = 0, D3D12_RECT* rects = nullptr);
 void						ClearUnorderedAccess(GPUCommandList*, resource_uav_t);
 void						SetShaderState	(GPUCommandList*, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory);
@@ -101,7 +92,24 @@ template<typename T> void	SetConstant(GPUCommandList* list, TextId var, T const&
 }
 
 void						GetD3D12StateDefaults(D3D12_RASTERIZER_DESC *pDest);
-
 void						UpdatePipelineStates();
+
+#define GPU_PROFILE_BEGIN(cl, name)                                                \
+    RMT_OPTIONAL(RMT_ENABLED, {                                                     \
+        static rmtU32 rmt_sample_hash_##name = 0;                                   \
+        GPUBeginProfiling(cl, #name, &rmt_sample_hash_##name);                      \
+    })
+
+#define GPU_PROFILE_END(cl)                                                          \
+    RMT_OPTIONAL(RMT_ENABLED, GPUEndProfiling(cl))
+
+struct GPUProfileScopeGuard {
+	GPUCommandList* cl;
+	inline ~GPUProfileScopeGuard() {
+		GPU_PROFILE_END(cl);
+	}
+};
+
+#define GPU_PROFILE_SCOPE(cl, LABEL)		GPU_PROFILE_BEGIN(cl, LABEL); GPUProfileScopeGuard guard__##LABEL##__LINE__ { cl } ;
 
 }

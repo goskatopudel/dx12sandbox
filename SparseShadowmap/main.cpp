@@ -300,7 +300,7 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 
 	Array<subresource_read_info_t> subres(GetThreadScratchAllocator());
 	{	PROFILE_SCOPE(wait_for_map);
-	MapReadbackBuffer(PagesCPU[PagesReadIndex], PagesNeeded, &subres);
+		MapReadbackBuffer(PagesCPU[PagesReadIndex], PagesNeeded, &subres);
 	}
 
 	u8 quadTreeDepth = (u8)Size(subres);
@@ -601,8 +601,7 @@ void Tick(float fDeltaTime) {
 	}
 
 	PROFILE_BEGIN(prepass);
-	static u32 rmtHash;
-	auto begin = BeginProfiling(depthCL, "abc", &rmtHash);
+	GPU_PROFILE_BEGIN(depthCL, prepass);
 
 	for (auto entity : testScene.Entities) {
 		auto worldMatrix = XMMatrixTranspose(
@@ -664,9 +663,10 @@ void Tick(float fDeltaTime) {
 		}
 	}
 
-	EndProfiling(depthCL, &begin);
+	GPU_PROFILE_END(depthCL);
 	PROFILE_END;
 
+	GPU_PROFILE_BEGIN(depthCL, tile_texture);
 	float3 cameraPos;
 	XMStoreFloat3(&cameraPos, CameraControlerPtr->Position);
 	SetComputeShaderState(depthCL, SHADER_(VirtualSM, PreparePages, CS_5_0));
@@ -690,10 +690,14 @@ void Tick(float fDeltaTime) {
 		Dispatch(depthCL, (target + 7) / 8, (target + 7) / 8, 1);
 		subresource++;
 	}
+	GPU_PROFILE_END(depthCL);
 
-	CopyToReadbackBuffer(depthCL, PagesCPU[PagesWriteIndex], PagesNeeded);
+	{	GPU_PROFILE_SCOPE(depthCL, copying_to_readback);
+		CopyToReadbackBuffer(depthCL, PagesCPU[PagesWriteIndex], PagesNeeded);
+	}
 	PagesCPUReady[PagesWriteIndex] = GetFence(depthCL);
 	PagesWriteIndex = (PagesWriteIndex + 1) % _countof(PagesCPU);
+
 
 	Execute(depthCL);
 	depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
@@ -719,6 +723,7 @@ void Tick(float fDeltaTime) {
 	ClearDepthStencil(depthCL, GetDSV(DepthBuffer));
 
 	PROFILE_BEGIN(main_pass);
+	GPU_PROFILE_BEGIN(depthCL, main_pass);
 
 	for (auto entity : testScene.Entities) {
 		auto worldMatrix = XMMatrixTranspose(
@@ -765,9 +770,12 @@ void Tick(float fDeltaTime) {
 		}
 	}
 
+	GPU_PROFILE_END(depthCL);
 	PROFILE_END;
 
-	CopyResource(depthCL, PagesNeededPrev, PagesNeeded);
+	{	GPU_PROFILE_SCOPE(depthCL, copy_pages);
+		CopyResource(depthCL, PagesNeededPrev, PagesNeeded);
+	}
 
 	u32 N = GetResourceInfo(PagesNeeded)->subresources_num;
 	u32 width = (u32)GetResourceInfo(PagesNeeded)->width;

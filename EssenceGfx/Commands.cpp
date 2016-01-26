@@ -300,15 +300,23 @@ public:
 	}
 };
 
+struct gpu_sample {
+	cstr	label;
+	u32*	rmt_name_hash;
+	u32		timestamp_index_begin;
+	u32		timestamp_index_end;
+	GPUCommandList*	cl;
+};
+
+struct sample_internal {
+	cstr	label;
+	u32		name_hash;
+	u32		timestamp_index_begin;
+	u32		timestamp_index_end;
+};
+
 class GPUProfiler {
 public:
-	struct sample_internal {
-		cstr	label;
-		u32		name_hash;
-		u32		timestamp_index_begin;
-		u32		timestamp_index_end;
-	};
-
 	struct query_readback_frame_fence {
 		u64 index_from;
 		u64 num;
@@ -353,7 +361,7 @@ public:
 		VerifyHr(GD12Device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(QueryHeap.GetInitPtr())));
 
 		for (u32 i = 0; i < MaxQueuedFrames; ++i) {
-			Readback[i] = CreateBuffer(READBACK_MEMORY, MaxPendingQueries / MaxQueuedFrames, BUFFER_NO_FLAGS, "readback buffer");
+			Readback[i] = CreateBuffer(READBACK_MEMORY, sizeof(u64) * (MaxPendingQueries + MaxQueuedFrames - 1) / MaxQueuedFrames, BUFFER_NO_FLAGS, "readback buffer");
 			ReadFences[i] = {};
 		}
 
@@ -370,11 +378,23 @@ public:
 	}
 
 	void AttachToQueue(GPUQueue* queue);
-	void Begin(gpu_sample *block);
-	void End(gpu_sample *block);
+	void GatherListSamples(Ringbuffer<sample_internal> *rb);
 
 	void ResolveFrameProfilingQueries(GPUCommandList* list);
 	void ReadbackAndFeedProfiler();
+};
+
+class GPUProfilerContext {
+public:
+	GPUProfiler*					Profiler;
+	Ringbuffer<sample_internal>		Samples;
+
+	void Begin(gpu_sample *sample);
+	void End(gpu_sample *sample);
+
+	~GPUProfilerContext() {
+		FreeMemory(Samples);
+	}
 };
 
 struct VertexFactory {
@@ -785,6 +805,10 @@ public:
 	ResourceNameId				Usage;
 	CommandListStateEnum		State;
 	ResourceTracker				ResourcesStateTracker;
+	GPUProfilerContext			ProfilerContext;
+#if GPU_PROFILING
+	gpu_sample					Sample;
+#endif
 	//
 	struct {
 		Array<CPU_DESC_HANDLE>					DstDescRanges;
@@ -843,12 +867,18 @@ public:
 		Bindings = nullptr;
 
 		Type = {};
+
+		Sample = {};
 	}
 
 	GPUCommandList(ResourceNameId usage, GPUCommandAllocator* allocator, GPUQueue *queue, GPUCommandListPool* pool)
 		: Usage(usage), CommandAllocator(allocator), Queue(queue), Pool(pool), State(), ResourcesStateTracker(this), Type()
 	{
 		VerifyHr(GD12Device->CreateCommandList(0, GetD12QueueType(queue->Type), *allocator->D12CommandAllocator, nullptr, IID_PPV_ARGS(D12CommandList.GetInitPtr())));
+
+#if GPU_PROFILING
+		ProfilerContext.Profiler = *Queue->Profiler;
+#endif
 	}
 
 	~GPUCommandList() {
@@ -1023,37 +1053,19 @@ void GPUProfiler::AttachToQueue(GPUQueue* queue) {
 	VerifyHr(Queue->D12CommandQueue->GetClockCalibration(&QueueClockGpuCtr, &QueueClockCpuCalibratedCtr));
 }
 
-void GPUProfiler::Begin(gpu_sample *sample) {
-	u64 index = QueryIssueIndex++;
-	rmt_PrepareGPUSample(sample->label, sample->rmt_name_hash);
-	sample->timestamp_index_begin = (u32)(index % MaxTimestamps);
-	sample->timestamp_index_end = -1;
-
-	sample->cl->D12CommandList->EndQuery(*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP, sample->timestamp_index_begin % MaxTimestamps);
-}
-
-void GPUProfiler::End(gpu_sample *sample) {
-	u64 index = QueryIssueIndex++;
-	sample->timestamp_index_end = (u32)(index % MaxTimestamps);
-
-	sample->cl->D12CommandList->EndQuery(*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP, sample->timestamp_index_end % MaxTimestamps);
-
-	sample_internal stored;
-	stored.label = sample->label;
-	stored.name_hash = *sample->rmt_name_hash;
-	stored.timestamp_index_begin = sample->timestamp_index_begin;
-	stored.timestamp_index_end = sample->timestamp_index_end;
-
-	ScopeLock lock(&CS);
-	PushBack(Samples, stored);
+void GPUProfiler::GatherListSamples(Ringbuffer<sample_internal> *rb) {
+	while (Size(*rb)) {
+		PushBack(Samples, Front(*rb));
+		PopFront(*rb);
+	}
 }
 
 void GPUProfiler::ResolveFrameProfilingQueries(GPUCommandList* list) {
 	ScopeLock lock(&CS);
 
 	sample_internal guard;
-	guard.timestamp_index_begin = -1;
-	guard.timestamp_index_end = -1;
+	guard.timestamp_index_begin = 0xFFFFFFFF;
+	guard.timestamp_index_end = 0xFFFFFFFF;
 
 	PushBack(Samples, guard);
 
@@ -1070,6 +1082,8 @@ void GPUProfiler::ResolveFrameProfilingQueries(GPUCommandList* list) {
 		list->D12CommandList->ResolveQueryData(
 			*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP,
 			index0, index1 - index0, GetResourceInfo(Readback[WriteIndex])->resource, 0);
+
+		QueryResolveIndex += (index1 - index0);
 	}
 	else {
 		u32 size = (u32)((MaxTimestamps - index0) + index1) * sizeof(u64);
@@ -1080,6 +1094,8 @@ void GPUProfiler::ResolveFrameProfilingQueries(GPUCommandList* list) {
 		list->D12CommandList->ResolveQueryData(
 			*QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP,
 			0, index1, GetResourceInfo(Readback[WriteIndex])->resource, sizeof(u64)*(MaxTimestamps - index0));
+
+		QueryResolveIndex += (u32)(MaxTimestamps - index0) + index1;
 	}
 
 	query_readback_frame_fence fence;
@@ -1116,9 +1132,6 @@ void GPUProfiler::ReadbackAndFeedProfiler() {
 			u64		end_clocks;
 		};
 
-		Array<timing_t> timings(GetThreadScratchAllocator());
-		Reserve(timings, Size(Samples));
-
 		u64 CPUFrequency = rmt_GetCPUFrequency();
 		double usScaling = 1000000.0 / CPUFrequency;
 
@@ -1126,23 +1139,23 @@ void GPUProfiler::ReadbackAndFeedProfiler() {
 			auto gpu_sample = Front(Samples);
 			PopFront(Samples);
 
-			if (gpu_sample.timestamp_index_begin == -1 && gpu_sample.timestamp_index_end == -1) {
+			if (gpu_sample.timestamp_index_begin == 0xFFFFFFFF && gpu_sample.timestamp_index_end == 0xFFFFFFFF) {
 				// guard block, break loop
 				break;
 			}
 
 			// read from mapped
-			u64 gpu_begin_ctr = timestamps[gpu_sample.timestamp_index_begin - fence.index_from];
-			u64 gpu_end_ctr = timestamps[gpu_sample.timestamp_index_end - fence.index_from];
-
-			timing_t timing;
-
-			timing.label = gpu_sample.label;
-			timing.name_hash = gpu_sample.name_hash;
-			timing.start_clocks = (gpu_begin_ctr - QueueClockGpuCtr) * CPUFrequency / QueueFrequency;// +QueueClockCpuCalibratedCtr;
-			timing.end_clocks = (gpu_end_ctr - QueueClockGpuCtr) * CPUFrequency / QueueFrequency;// +QueueClockCpuCalibratedCtr;
-
-			PushBack(timings, timing);
+			if (gpu_sample.timestamp_index_begin != 0xFFFFFFFF) {
+				u64 gpu_begin_ctr = timestamps[gpu_sample.timestamp_index_begin - fence.index_from];
+				u64 start_clocks = (gpu_begin_ctr - QueueClockGpuCtr) * CPUFrequency / QueueFrequency;
+				rmt_BeginGPUSample(gpu_sample.label, gpu_sample.name_hash, (u64)(start_clocks * usScaling));
+			}
+			else {
+				Check(gpu_sample.timestamp_index_end != 0xFFFFFFFF);
+				u64 gpu_end_ctr = timestamps[gpu_sample.timestamp_index_end - fence.index_from];
+				u64 end_clocks = (gpu_end_ctr - QueueClockGpuCtr) * CPUFrequency / QueueFrequency;
+				rmt_EndGPUSample((u64)(end_clocks * usScaling), Queue->DebugName);
+			}
 		}
 
 		D3D12_RANGE writtenRange;
@@ -1150,31 +1163,40 @@ void GPUProfiler::ReadbackAndFeedProfiler() {
 		writtenRange.End = 0;
 		readbackBuffer->Unmap(0, &writtenRange);
 
-		Array<u32> endingIndices(GetThreadScratchAllocator());
-		Reserve(endingIndices, Size(timings));
-		for (u32 i : MakeRange((u32)Size(timings))) {
-			PushBack(endingIndices, i);
-		}
-
-		quicksort(timings.DataPtr, 0, Size(timings), [&](timing_t const& a, timing_t const& b) { return a.start_clocks < b.start_clocks; });
-		quicksort(endingIndices.DataPtr, 0, Size(endingIndices), [&](u32 a, u32 b) { return timings[a].end_clocks < timings[b].end_clocks; });
-
-		u32 beginIndex = 0;
-		u32 endIndex = 0;
-		u32 N = (u32)Size(timings);
-		while (endIndex < N) {
-			if (beginIndex < N && timings[beginIndex].start_clocks <= timings[endingIndices[endIndex]].end_clocks) {
-				rmt_BeginGPUSample(timings[beginIndex].label, timings[beginIndex].name_hash, (u64)(timings[beginIndex].start_clocks * usScaling));
-				++beginIndex;
-			}
-			else{
-				rmt_EndGPUSample((u64)(timings[endingIndices[endIndex]].end_clocks * usScaling), Queue->DebugName);
-				++endIndex;
-			}
-		}
-
 		ReadIndex = (ReadIndex + 1) % MaxQueuedFrames;
 	}
+}
+
+void GPUProfilerContext::Begin(gpu_sample *sample) {
+	u64 index = Profiler->QueryIssueIndex++;
+	rmt_PrepareGPUSample(sample->label, sample->rmt_name_hash);
+	sample->timestamp_index_begin = (u32)(index % Profiler->MaxTimestamps);
+	sample->timestamp_index_end = -1;
+
+	sample->cl->D12CommandList->EndQuery(*Profiler->QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP, sample->timestamp_index_begin % Profiler->MaxTimestamps);
+
+	sample_internal stored;
+	stored.label = sample->label;
+	stored.name_hash = *sample->rmt_name_hash;
+	stored.timestamp_index_begin = sample->timestamp_index_begin;
+	stored.timestamp_index_end = 0xFFFFFFFF;
+
+	PushBack(Samples, stored);
+}
+
+void GPUProfilerContext::End(gpu_sample *sample) {
+	u64 index = Profiler->QueryIssueIndex++;
+	sample->timestamp_index_end = (u32)(index % Profiler->MaxTimestamps);
+
+	sample->cl->D12CommandList->EndQuery(*Profiler->QueryHeap, D3D12_QUERY_TYPE_TIMESTAMP, sample->timestamp_index_end % Profiler->MaxTimestamps);
+
+	sample_internal stored;
+	stored.label = sample->label;
+	stored.name_hash = *sample->rmt_name_hash;
+	stored.timestamp_index_begin = 0xFFFFFFFF;
+	stored.timestamp_index_end = sample->timestamp_index_end;
+
+	PushBack(Samples, stored);
 }
 
 GPUFenceHandle GetFence(GPUCommandList* list) {
@@ -1202,6 +1224,12 @@ void Close(GPUCommandList* list) {
 const u32 RESOURCE_STATE_UNKNOWN = 0xFFFFFFFF;
 
 void Execute(GPUCommandList* list) {
+#if GPU_PROFILING
+	Check(list->Sample.cl == nullptr);
+	list->Queue->Profiler->GatherListSamples(&list->ProfilerContext.Samples);
+	Check(Size(list->ProfilerContext.Samples) == 0);
+#endif
+
 	if (list->State == CL_RECORDING) {
 		Close(list);
 	}
@@ -1780,22 +1808,22 @@ void CopyResource(GPUCommandList* list, resource_handle dst, resource_handle src
 	list->D12CommandList->CopyResource(GetResourceFast(dst)->resource, GetResourceFast(src)->resource);
 }
 
-gpu_sample BeginProfiling(GPUCommandList* list, cstr label, u32* rmt_name_hash) {
-	gpu_sample sample = {};
+void GPUBeginProfiling(GPUCommandList* list, cstr label, u32* rmt_name_hash) {
 #if GPU_PROFILING
-	sample.label = label;
-	sample.rmt_name_hash = rmt_name_hash;
-	sample.cl = list;
-	list->Queue->Profiler->Begin(&sample);
+	Check(list->Sample.cl == nullptr);
+	list->Sample.label = label;
+	list->Sample.rmt_name_hash = rmt_name_hash;
+	list->Sample.cl = list;
+	list->ProfilerContext.Begin(&list->Sample);
 #endif
-	return sample;
 }
 
-void EndProfiling(GPUCommandList* list, gpu_sample* sample) {
+void GPUEndProfiling(GPUCommandList* list) {
 #if GPU_PROFILING
-	list->Queue->Profiler->End(sample);
+	Check(list->Sample.cl);
+	list->ProfilerContext.End(&list->Sample);
+	list->Sample = {};
 #endif
-	sample = {};
 }
 
 void ClearRenderTarget(GPUCommandList* list, resource_rtv_t rtv, float4 color) {

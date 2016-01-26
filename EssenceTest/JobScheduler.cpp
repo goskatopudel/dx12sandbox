@@ -90,12 +90,12 @@ struct TaggedHeap {
 
 template<typename T, u32 Size>
 struct TSRingbuffer {
-	CACHE_ALIGN i64 volatile ReadIndex;
-	CACHE_ALIGN i64 volatile WriteIndex;
-	CACHE_ALIGN i64 volatile WriteCommitedIndex;
-	CACHE_ALIGN T*	Data;
+	i64 ReadIndex;
+	i64 WriteIndex;
+	T*	Data;
+	CriticalSection Cs;
 
-	TSRingbuffer() : ReadIndex(0), WriteIndex(0), WriteCommitedIndex(0), Data(nullptr) {}
+	TSRingbuffer() : ReadIndex(0), WriteIndex(0), Data(nullptr) {}
 
 	void InitMemory() {
 		Data = (T*)GetMallocAllocator()->Allocate(sizeof(T) * Size, alignof(T));
@@ -114,21 +114,18 @@ struct TSRingbuffer {
 	}
 
 	void Push(T val) {
+		ScopeLock lock(&Cs);
 		assert(ReadIndex + Size != WriteIndex);
-		i64 writeIndex = InterlockedIncrement64(&WriteIndex) - 1;
-		Data[writeIndex % Size] = val;
-		InterlockedIncrement64(&WriteCommitedIndex);
+		Data[WriteIndex % Size] = val;
+		++WriteIndex;
 	}
 
 	bool Pop(T *outVal) {
-		i64 read = ReadIndex;
-		while (read + 1 <= WriteCommitedIndex) {
-			i64 prev = InterlockedCompareExchange64(&ReadIndex, read + 1, read);
-			if (prev == read) {
-				*outVal = Data[read % Size];
-				return true;
-			}
-			read = prev;
+		ScopeLock lock(&Cs);
+		if (ReadIndex != WriteIndex) {
+			*outVal = Data[ReadIndex % Size];
+			++ReadIndex;
+			return true;
 		}
 		return false;
 	}
