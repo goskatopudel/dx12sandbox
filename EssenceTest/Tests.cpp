@@ -399,25 +399,36 @@ void child(void*) {
 		_mm_pause();
 	}
 
-	job_desc_t jobs[10];
-	for (int i = 0; i < 10; ++i) {
+	job_desc_t jobs[32];
+	for (int i = 0; i < 32; ++i) {
 		jobs[i] = { child1, nullptr };
 	}
 	OutputDebugStringA("child pre\n");
-	WaitForCompletion(ScheduleJobs(jobs, 10));
+	WaitForCompletion(ScheduleJobs(jobs, 32));
 	OutputDebugStringA("child post\n");
 }
 
 void root(void*) {
-	job_desc_t jobs[10];
-	for (int i = 0; i < 10; ++i) {
+	job_desc_t jobs[32];
+	for (int i = 0; i < 32; ++i) {
 		jobs[i] = { child, nullptr };
 	}
 	OutputDebugStringA("root pre\n");
-	WaitForCompletion(ScheduleJobs(jobs, 10));
+	WaitForCompletion(ScheduleJobs(jobs, 32));
 	OutputDebugStringA("root post\n");
 	OutputDebugStringA("root pre\n");
-	WaitForCompletion(ScheduleJobs(jobs, 10));
+	WaitForCompletion(ScheduleJobs(jobs, 32));
+	OutputDebugStringA("root post\n");
+
+	job_desc_t jobs1[32];
+	for (int i = 0; i < 32; ++i) {
+		jobs1[i] = { child, nullptr };
+	}
+	OutputDebugStringA("root pre\n");
+	auto A = ScheduleJobs(jobs, 32);
+	auto B = ScheduleJobs(jobs1, 32);
+	WaitForCompletion(A);
+	WaitForCompletion(B);
 	OutputDebugStringA("root post\n");
 }
 
@@ -430,26 +441,28 @@ void root2(void* pVoidParams) {
 	
 	if (depth == 0) {
 		OutputDebugStringA("root pre\n");
-		job_desc_t jobs[10];
-		root2_params params[10];
-		for (int i = 0; i < 10; ++i) {
+		job_desc_t jobs[32];
+		root2_params params[32];
+		for (int i = 0; i < 32; ++i) {
 			params[i].depth = 1;
 			jobs[i] = { root2, &params[i] };
 		}
-		WaitForCompletion(ScheduleJobs(jobs, 10));
+		WaitForCompletion(ScheduleJobs(jobs, 32));
 		OutputDebugStringA("root post\n");
 	}
 	else if (depth == 1) {
 		for (int i = 0; i < 10; ++i) {
 			_mm_pause();
 		}
-		job_desc_t jobs[10];
-		root2_params params[10];
-		for (int i = 0; i < 10; ++i) {
+		job_desc_t jobs[32];
+		root2_params params[32];
+		for (int i = 0; i < 32; ++i) {
 			params[i].depth = 2;
 			jobs[i] = { root2, &params[i] };
 		}
-		WaitForCompletion(ScheduleJobs(jobs, 10));
+		OutputDebugStringA("child pre\n");
+		WaitForCompletion(ScheduleJobs(jobs, 32));
+		OutputDebugStringA("child post\n");
 	}
 	else if (depth == 2) {
 		for (int i = 0; i < 100; ++i) {

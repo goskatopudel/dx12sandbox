@@ -115,7 +115,7 @@ struct TSRingbuffer {
 
 	void Push(T val) {
 		ScopeLock lock(&Cs);
-		assert(ReadIndex + Size != WriteIndex);
+		Check(ReadIndex + Size != WriteIndex);
 		Data[WriteIndex % Size] = val;
 		++WriteIndex;
 	}
@@ -149,14 +149,14 @@ u32													WorkersNum;
 volatile u32										ActiveWorkerThreadsNum;
 CACHE_ALIGN	volatile u32							Suspended;
 HANDLE												WorkerThreads[MAX_WORKERS];
-static const u32									MAX_FIBERS = 1023;
+static const u32									MAX_FIBERS = 2047;
 fiber_ptr											MainFibres[MAX_FIBERS];
 volatile u32										MainFibresUsed;
 TSRingbuffer<fiber_ptr, MAX_FIBERS + 1>				FreeMainFibres;
 CriticalSection										WorkSection;
 ConditionVariable									WorkCondition;
-static const u32									MAX_SCHEDULED_JOBS = 1023;
-TSRingbuffer<job_data_t, MAX_SCHEDULED_JOBS + 1>	JobQueue;
+static const u32									MAX_SCHEDULED_JOBS = 2047;
+TSRingbuffer<job_data_t, MAX_SCHEDULED_JOBS + 1>	JobsQueue;
 static const u32									MAX_WAITABLES = 255;
 CriticalSection										WaitablesSection;
 volatile u32										WaitableCounters[MAX_WAITABLES];
@@ -164,6 +164,36 @@ volatile u32										WaitableListNum;
 counter_t											Counters[MAX_WAITABLES];
 volatile u32										NextCounterIndex;
 TSRingbuffer<u32, MAX_WAITABLES + 1>				FreeCounters;
+
+thread_local fiber_ptr								TLCarryFiber;
+thread_local fiber_ptr								TLWaitFiber;
+thread_local fiber_ptr								TLPayloadFiber;
+thread_local fiber_ptr								TLSwitchTo;
+thread_local job_waitable_id						TLWaitableId;
+
+void WINAPI carry_fiber_main(void*) {
+	while (1) {
+		FreeMainFibres.Push(TLPayloadFiber);
+		TLPayloadFiber = nullptr;
+		fiber_ptr dst = TLSwitchTo;
+		TLSwitchTo = nullptr;
+		SwitchToFiber(dst);
+	}
+}
+
+void WINAPI wait_fiber_main(void*) {
+	while (1) {
+		Counters[TLWaitableId.index].fiber = TLPayloadFiber;
+		TLPayloadFiber = nullptr;
+		{	ScopeLock lock(&WaitablesSection);
+			WaitableCounters[WaitableListNum++] = TLWaitableId.index;
+		}
+		fiber_ptr dst = TLSwitchTo;
+		TLSwitchTo = nullptr;
+		SwitchToFiber(dst);
+	}
+}
+
 
 fiber_ptr GetNextMainFiber() {
 	fiber_ptr fiber;
@@ -195,12 +225,12 @@ void WINAPI fiber_main(void* pVoidParams);
 void InitJobScheduler() {
 	WorkersNum = std::thread::hardware_concurrency() - 1;
 
-	JobQueue.InitMemory();
+	JobsQueue.InitMemory();
 	FreeCounters.InitMemory();
 	FreeMainFibres.InitMemory();
 
 	for (u32 i = 0; i < MAX_FIBERS; ++i) {
-		MainFibres[i] = CreateFiber(64 * 1024, fiber_main, nullptr);
+		MainFibres[i] = CreateFiber(0, fiber_main, nullptr);
 	}
 
 	WorkerThreads[0] = GetCurrentThread();
@@ -209,6 +239,8 @@ void InitJobScheduler() {
 	}
 
 	Verify(ConvertThreadToFiber(nullptr));
+	TLCarryFiber = CreateFiber(0, carry_fiber_main, nullptr);
+	TLWaitFiber = CreateFiber(0, wait_fiber_main, nullptr);
 }
 
 void ShutdownJobScheduler() {
@@ -233,19 +265,32 @@ void ShutdownJobScheduler() {
 		}
 	}
 
-	JobQueue.FreeMemory();
+	for (u32 i = 0;i < MAX_FIBERS; ++i) {
+		DeleteFiber(MainFibres[i]);
+	}
+	DeleteFiber(TLCarryFiber);
+	DeleteFiber(TLWaitFiber);
+
+	JobsQueue.FreeMemory();
 	FreeCounters.FreeMemory();
 	FreeMainFibres.FreeMemory();
 }
 
 DWORD WINAPI worker_thread_main(void* pVoidParams) {
 	Verify(ConvertThreadToFiber(nullptr));
-	u32 workerIndex = InterlockedIncrement(&ActiveWorkerThreadsNum) - 1;
-	WorkerThreadFibers[workerIndex] = GetCurrentFiber();
+	auto currentFiber = GetCurrentFiber();
+	auto nextFiber = GetNextMainFiber();
+	TLCarryFiber = CreateFiber(0, carry_fiber_main, nullptr);
+	TLWaitFiber = CreateFiber(0, wait_fiber_main, nullptr);
 
-	SwitchToFiber(GetNextMainFiber());
+	u32 workerIndex = InterlockedIncrement(&ActiveWorkerThreadsNum) - 1;
+	WorkerThreadFibers[workerIndex] = currentFiber;
+	SwitchToFiber(nextFiber);
 
 	Verify(ConvertFiberToThread());
+
+	DeleteFiber(TLCarryFiber);
+	DeleteFiber(TLWaitFiber);
 
 	return 0;
 }
@@ -258,7 +303,7 @@ job_waitable_id ScheduleJobs(job_desc_t* jobs, u32 num) {
 		job_data.work = jobs[i];
 		job_data.waitable = waitable;
 
-		JobQueue.Push(job_data);
+		JobsQueue.Push(job_data);
 	}
 
 	WorkCondition.WakeAll();
@@ -271,11 +316,13 @@ void WaitForCompletion(job_waitable_id waitable) {
 		return;
 	}
 	
-	Counters[waitable.index].fiber = GetCurrentFiber();
-	u32 index = InterlockedIncrement(&WaitableListNum) - 1;
-	WaitableCounters[index] = waitable.index;
+	Check(TLPayloadFiber == nullptr);
+	Check(TLSwitchTo == nullptr);
+	TLPayloadFiber = GetCurrentFiber();
+	TLSwitchTo = GetNextMainFiber();
+	TLWaitableId = waitable;
 
-	SwitchToFiber(GetNextMainFiber());
+	SwitchToFiber(TLWaitFiber);
 }
 
 bool IsCompleted(job_waitable_id waitable) {
@@ -285,27 +332,32 @@ bool IsCompleted(job_waitable_id waitable) {
 void WINAPI fiber_main(void* pVoidParams) {
 	while (!Suspended) {
 		job_data_t job_data;
-		fiber_ptr fiber = nullptr;
 
-		for (u32 i = 0; i < WaitableListNum; ++i) {
-			if (Counters[WaitableCounters[i]].value == 0) {
-				ScopeLock lock(&WaitablesSection);
-				if (i < WaitableListNum && Counters[WaitableCounters[i]].value == 0) {
-					u32 index = WaitableCounters[i];
-					swap(WaitableCounters[i], WaitableCounters[WaitableListNum - 1]);
-					WaitableListNum--;
-					fiber = Counters[index].fiber;
-					break;
+		fiber_ptr awaitingFiber = nullptr;
+		{
+			ScopeLock lock(&WaitablesSection);
+			for (u32 i = 0; i < WaitableListNum; ++i) {
+				if (Counters[WaitableCounters[i]].value == 0) {
+					if (i < WaitableListNum && Counters[WaitableCounters[i]].value == 0) {
+						u32 index = WaitableCounters[i];
+						swap(WaitableCounters[i], WaitableCounters[WaitableListNum - 1]);
+						WaitableListNum--;
+						awaitingFiber = Counters[index].fiber;
+						break;
+					}
 				}
 			}
 		}
-
-		if (fiber) {
-			FreeMainFibres.Push(GetCurrentFiber());
-			SwitchToFiber(fiber);
+		if (awaitingFiber) {
+			// this avoids putting current fiber in queue too early
+			Check(TLPayloadFiber == nullptr);
+			Check(TLSwitchTo == nullptr);
+			TLPayloadFiber = GetCurrentFiber();
+			TLSwitchTo = awaitingFiber;
+			SwitchToFiber(TLCarryFiber);
 		}
 
-		if (JobQueue.Pop(&job_data)) {
+		if (JobsQueue.Pop(&job_data)) {
 			job_data.work.func(job_data.work.p_args);
 			InterlockedDecrement(&Counters[job_data.waitable.index].value);
 		}
