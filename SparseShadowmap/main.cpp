@@ -31,7 +31,8 @@ resource_handle ShadowLOD;
 resource_handle LowResSM;
 resource_handle VirtualSM;
 resource_handle PagesNeeded;
-resource_handle PagesNeededPrev;
+resource_handle PagesNeededPrev[2];
+u32				PagesPrevIndex;
 resource_handle PagesCPU[2];
 GPUFenceHandle	PagesCPUReady[2];
 u32				PagesWriteIndex;
@@ -271,7 +272,9 @@ void Init() {
 	LowResSM = CreateTexture(128, 128, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL, "low_res_sm");
 	VirtualSM = CreateTexture(16384, 16384, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL | TEX_MIPMAPPED | TEX_VIRTUAL, "virtual_sm");
 	PagesNeeded = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, ALLOW_UNORDERED_ACCESS | TEX_MIPMAPPED, "vsm_pages");
-	PagesNeededPrev = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, TEX_MIPMAPPED, "vsm_pages_prev");
+	for (u32 i = 0; i < _countof(PagesNeededPrev); ++i) {
+		PagesNeededPrev[i] = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, TEX_MIPMAPPED, "vsm_pages_prev");
+	}
 
 	for (auto i : MakeRange(_countof(PagesCPU))) {
 		PagesCPU[i] = CreateReadbackBufferForResource(PagesNeeded);
@@ -698,7 +701,7 @@ void Tick(float fDeltaTime) {
 	PagesCPUReady[PagesWriteIndex] = GetFence(depthCL);
 	PagesWriteIndex = (PagesWriteIndex + 1) % _countof(PagesCPU);
 
-
+	// flushing commands 
 	Execute(depthCL);
 	depthCL = GetCommandList(GGPUMainQueue, NAME_("depth_cl"));
 
@@ -749,7 +752,8 @@ void Tick(float fDeltaTime) {
 			SetTexture2D(depthCL, TEXT_("Shadowmap"), GetSRV(VirtualSM));
 			float3 f3LightDirection = toFloat3(lightDirection);
 			SetConstant(depthCL, TEXT_("LightDirection"), f3LightDirection);
-			SetTexture2D(depthCL, TEXT_("ShadowMipLookup"), GetSRV(PagesNeededPrev));
+			SetTexture2D(depthCL, TEXT_("ShadowMipLookup"), GetSRV(PagesNeededPrev[PagesPrevIndex]));
+			SetTexture2D(depthCL, TEXT_("ShadowMipLookupPrev"), GetSRV(PagesNeededPrev[(PagesPrevIndex + 1) % _countof(PagesNeededPrev)]));
 
 			buffer_location_t vb;
 			vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
@@ -774,7 +778,8 @@ void Tick(float fDeltaTime) {
 	PROFILE_END;
 
 	{	GPU_PROFILE_SCOPE(depthCL, copy_pages);
-		CopyResource(depthCL, PagesNeededPrev, PagesNeeded);
+		PagesPrevIndex = (PagesPrevIndex + 1) % _countof(PagesNeededPrev);
+		CopyResource(depthCL, PagesNeededPrev[PagesPrevIndex], PagesNeeded);
 	}
 
 	u32 N = GetResourceInfo(PagesNeeded)->subresources_num;

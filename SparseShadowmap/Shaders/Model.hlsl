@@ -69,7 +69,8 @@ float3 HsvToRgb(float3 HSV) {
 }
 
 Texture2D<float> 	Shadowmap : register( t0 );
-Texture2D<uint>		ShadowMipLookup : register( t1 );
+Texture2D<uint>		ShadowMipLookup : register( t1, space0 );
+Texture2D<uint>		ShadowMipLookupPrev : register( t1, space1 );
 SamplerState    	Sampler : register(s0);
 float3 				LightDirection;
 
@@ -80,13 +81,13 @@ void PShader(VOut interpolated, out float4 outColor : SV_TARGET0)
 	smpos.y *= -1;
 	float2 smuv = saturate(smpos.xy * 0.5 + 0.5);
 	uint2 page = smuv.xy * 128;
-	uint lmip = ShadowMipLookup[page].r;
+	uint2 lmip = uint2(ShadowMipLookup[page].r, ShadowMipLookupPrev[page].r);
 
 	uint width, height, mipLevels;
 	Shadowmap.GetDimensions(0, width, height, mipLevels);
-	float mip = clamp((float)mipLevels - 1 - (float)lmip, 0, mipLevels - 1);
+	float2 mip = clamp((float2)mipLevels.xx - 1 - (float2)lmip, 0, mipLevels.xx - 1);
 
-	float smz = Shadowmap.SampleLevel(Sampler, smuv, mip).r;
+	float smz = Shadowmap.SampleLevel(Sampler, smuv, max(mip.x, mip.y)).r;
 
 	float lit = smz > (smpos.z - 0.0001f);
 	float light = saturate(dot(normalize(interpolated.normal), LightDirection));

@@ -644,6 +644,8 @@ void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 
 	ResourcesTransitionTable[handle.GetIndex()] = {};
 	ResourcesTransitionTable[handle.GetIndex()].default_state = D3D12_RESOURCE_STATE_COMMON;
+	// transition needs memory set
+	ResourcesTransitionTable[handle.GetIndex()].heap_type = DEFAULT_MEMORY;
 
 	ResourcesViews[handle.GetIndex()].rtv_locations = RTVDescHeap.Allocate(1);
 	GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations));
