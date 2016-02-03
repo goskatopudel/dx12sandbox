@@ -641,7 +641,7 @@ void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 	Record.desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 	ResourcesFastTable[handle.GetIndex()].resource = resource;
-
+	
 	ResourcesTransitionTable[handle.GetIndex()] = {};
 	ResourcesTransitionTable[handle.GetIndex()].default_state = D3D12_RESOURCE_STATE_COMMON;
 	// transition needs memory set

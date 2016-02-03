@@ -2,50 +2,6 @@
 
 #include "Types.h"
 
-
-template<typename T>
-struct Range {
-	T		from;
-	const T	to;
-
-	Range(T to) : from((T)0), to(to) {
-	}
-
-	Range(T from, T to) : from(from), to(to) {
-	}
-
-	Range begin() const {
-		return *this;
-	}
-
-	Range end() const {
-		return Range(to, to);
-	}
-
-	Range& operator++() {
-		++from;
-		return *this;
-	}
-
-	bool operator==(const Range& rhs) const {
-		return from == rhs.from && to == rhs.to;
-	}
-
-	bool operator!=(const Range& rhs) const {
-		return from != rhs.from || to != rhs.to;
-	}
-
-	T operator*() const {
-		return from;
-	}
-};
-
-typedef Range<i32> i32Range;
-typedef Range<u32> u32Range;
-
-template<typename T> Range<T> MakeRange(T val) { return Range<T>(val); }
-template<typename T> Range<T> MakeRange(T A, T B) { return Range<T>(A, B); }
-
 template<typename T>
 void swap(T* data, size_t x, size_t y) {
 	T tmp = data[x];

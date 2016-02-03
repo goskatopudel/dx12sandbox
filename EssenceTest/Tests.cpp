@@ -5,6 +5,7 @@
 #include "Memory.h"
 
 #include "Algorithms.h"
+#include "Functional.h"
 
 Essence::Array<i32> GArray;
 

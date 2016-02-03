@@ -20,6 +20,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SparseShadowmap", "SparseSh
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EmptyProject", "EmptyProject\EmptyProject.vcxproj", "{41CE839B-5502-43DB-A8E8-AD9B27F31850}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Scratchpad", "Scratchpad\Scratchpad.vcxproj", "{F074C041-0846-4FFF-B6A6-D794C90BADC6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -113,6 +115,18 @@ Global
 		{41CE839B-5502-43DB-A8E8-AD9B27F31850}.Release|x64.Build.0 = Release|x64
 		{41CE839B-5502-43DB-A8E8-AD9B27F31850}.Release|x86.ActiveCfg = Release|Win32
 		{41CE839B-5502-43DB-A8E8-AD9B27F31850}.Release|x86.Build.0 = Release|Win32
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Debug|x64.ActiveCfg = Debug|x64
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Debug|x64.Build.0 = Debug|x64
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Debug|x86.ActiveCfg = Debug|Win32
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Debug|x86.Build.0 = Debug|Win32
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Profile|x64.ActiveCfg = Profile|x64
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Profile|x64.Build.0 = Profile|x64
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Profile|x86.ActiveCfg = Profile|Win32
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Profile|x86.Build.0 = Profile|Win32
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Release|x64.ActiveCfg = Release|x64
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Release|x64.Build.0 = Release|x64
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Release|x86.ActiveCfg = Release|Win32
+		{F074C041-0846-4FFF-B6A6-D794C90BADC6}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

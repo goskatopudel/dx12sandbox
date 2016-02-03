@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Types.h"
+#include "Functional.h"
 #include "Memory.h"
 #include "Thread.h"
 #include "Strings.h"

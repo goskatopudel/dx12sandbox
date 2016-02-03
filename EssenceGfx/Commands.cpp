@@ -1632,9 +1632,9 @@ void EndCommandsFrame(GPUQueue* mainQueue, u32 limitGpuBufferedFrames) {
 }
 
 void WaitForCompletion(GPUQueue* queue, u64 fenceValue) {
-	if (queue->D12Fence->GetCompletedValue() < fenceValue) {
+	while (queue->D12Fence->GetCompletedValue() < fenceValue) {
 		VerifyHr(queue->D12Fence->SetEventOnCompletion(fenceValue, queue->SyncEvent));
-		WaitForSingleObject(queue->SyncEvent, INFINITE);
+		WaitForSingleObject(queue->SyncEvent, 1);
 	}
 }
 

@@ -99,6 +99,12 @@
     <ClInclude Include="Views.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Functional.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="VectorMath.h">
+      <Filter>Core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MurmurHash.cpp">
