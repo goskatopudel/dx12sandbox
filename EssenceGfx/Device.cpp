@@ -200,7 +200,10 @@ void CreateSwapChain(ID3D12CommandQueue* queue) {
 	descSwapChain.OutputWindow = GHWND;
 	descSwapChain.SampleDesc.Count = 1;
 	descSwapChain.Windowed = TRUE;
-	descSwapChain.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+	descSwapChain.Flags = 
+		DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH 
+		// using waitable flag and ingoring it causes trouble
+		| (GDisplaySettings.wait_to_vblank ? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT : 0) ;
 
 	IDXGISwapChain* swapChain;
 	VerifyHr(GDXGIFactory->CreateSwapChain(
@@ -219,7 +222,9 @@ void CreateSwapChain(ID3D12CommandQueue* queue) {
 		RegisterSwapChainBuffer(resource, i);
 	}
 
-	VBlankWaitable = GSwapChain->GetFrameLatencyWaitableObject();
+	if (GDisplaySettings.wait_to_vblank) {
+		VBlankWaitable = GSwapChain->GetFrameLatencyWaitableObject();
+	}
 }
 
 void Present() {
@@ -248,7 +253,9 @@ void ResizeSwapChain(u32 width, u32 height) {
 
 	Check(GSwapChain);
 
-	VerifyHr(GSwapChain->ResizeBuffers(SwapBuffersNum, width, height, BackbufferFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT));
+	VerifyHr(GSwapChain->ResizeBuffers(SwapBuffersNum, width, height, BackbufferFormat, 
+		DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH 
+		| (GDisplaySettings.wait_to_vblank ? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT : 0)));
 
 	for (auto i : i32Range(SwapBuffersNum)) {
 		ID3D12Resource* resource;
@@ -274,7 +281,9 @@ DXGI_QUERY_VIDEO_MEMORY_INFO GetNonLocalMemoryInfo() {
 }
 
 void ShutdownDevice() {
-	Verify(CloseHandle(VBlankWaitable));
+	if (VBlankWaitable) {
+		Verify(CloseHandle(VBlankWaitable));
+	}
 
 	for (auto i : i32Range(MaxSwapBuffersNum)) {
 		if (SwapChainBuffer[i]) {

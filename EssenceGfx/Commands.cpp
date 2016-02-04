@@ -611,7 +611,7 @@ public:
 	}
 
 	void FenceExecution(GPUFenceHandle handle) {
-		if (Size(Fences) && Back(Fences) != handle) {
+		if (!Size(Fences) || Back(Fences) != handle) {
 			PushBack(Fences, handle);
 		}
 	}
@@ -1041,8 +1041,6 @@ GPUCommandList* GetCommandList(GPUQueue* queue, ResourceNameId usage) {
 
 	commandList->Fence = CreateFence(queue);
 	commandList->State = CL_RECORDING;
-
-	PushBack(allocator->Fences, commandList->Fence);
 
 	commandList->ResetState();
 
