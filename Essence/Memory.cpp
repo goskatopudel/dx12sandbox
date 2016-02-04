@@ -95,7 +95,7 @@ public:
 	}
 };
 
-const u32 THREAD_SCRATCH_BUFFER_SIZE = 8 * 1024 * 1024; // 8 MB
+const u32 THREAD_SCRATCH_BUFFER_SIZE = (u32)Megabytes(4);
 
 CACHE_ALIGN char G_mallocAllocator[sizeof(MallocAllocator)];
 
@@ -104,26 +104,25 @@ IAllocator *GetMallocAllocator() {
 }
 
 class ScratchAllocator : public IAllocator {
-	IAllocator*	BackingAllocator;
+	IAllocator*		BackingAllocator;
 
-	u8*			SegmentBegin;
-	u8*			SegmentEnd;
+	u8*				SegmentBegin;
+	u8*				SegmentEnd;
 	
-	u8*			ReadAddress;
-	u8*			WriteAddress;
+	u8*				ReadAddress;
+	u8*				WriteAddress;
 
-	i32			AllocationsNum;
-	i32			ThreadId;
+	i32				AllocationsNum;
+
+	CriticalSection Section;
 public:
 	ScratchAllocator(IAllocator* allocator, size_t size);
 	~ScratchAllocator();
 	void* Allocate(size_t size, size_t align) override;
 	void Free(void*) override;
 	size_t GetTotalAllocatedSize() const override;
-	void FixThread(i32 id);
 };
 
-char							G_scratchAllocator[sizeof(ScratchAllocator)];
 thread_local bool				TL_scratchAllocatorInitialized;
 thread_local CACHE_ALIGN char	TL_scratchAllocatorMemory[sizeof(ScratchAllocator)];
 
@@ -133,10 +132,6 @@ ScratchAllocator*				ScratchAllocators[64];
 u32								ScratchAllocatorsNum;
 CriticalSection					ScratchCS;
 #endif
-
-IAllocator* GetScratchAllocator() {
-	return reinterpret_cast<ScratchAllocator*>(G_scratchAllocator);
-}
 
 IAllocator *GetThreadScratchAllocatorPtr() {
 	return reinterpret_cast<ScratchAllocator*>(TL_scratchAllocatorMemory);
@@ -152,13 +147,10 @@ void FreeThreadAllocator() {
 void InitMemoryAllocators() {
 	auto ptr = G_mallocAllocator;
 	new(ptr) MallocAllocator();
-	new(GetScratchAllocator()) ScratchAllocator(GetMallocAllocator(), 1024 * 1024 * 16);
-	((ScratchAllocator*)GetScratchAllocator())->FixThread(GetThreadId());
 }
 
 void ShutdownMemoryAllocators() {
 	FreeThreadAllocator();
-	call_destructor(GetScratchAllocator());
 	call_destructor(GetMallocAllocator());
 }
 
@@ -190,7 +182,6 @@ ScratchAllocator::ScratchAllocator(IAllocator* allocator, size_t size)
 	ReadAddress = WriteAddress = SegmentBegin;
 
 	AllocationsNum = 0;
-	ThreadId = -1;
 }
 
 ScratchAllocator::~ScratchAllocator() {
@@ -198,15 +189,7 @@ ScratchAllocator::~ScratchAllocator() {
 	BackingAllocator->Free(SegmentBegin);
 }
 
-void ScratchAllocator::FixThread(i32 id) {
-	ThreadId = id;
-}
-
 void* ScratchAllocator::Allocate(size_t size, size_t alignment) {
-	if (ThreadId >= 0) {
-		Check(ThreadId == GetThreadId());
-	}
-
 	if (4 * size > pointer_sub(SegmentEnd, SegmentBegin)) {
 		void* ptr = BackingAllocator->Allocate(size, alignment);
 		Check(ptr < SegmentBegin || SegmentEnd < ptr);
@@ -215,6 +198,9 @@ void* ScratchAllocator::Allocate(size_t size, size_t alignment) {
 
 	alignment = max(alignment, ALLOCATION_MIN_ALIGNMENT);
 	static_assert(sizeof(scratch_header_t) == ALLOCATION_MIN_ALIGNMENT, "header alignment & size mismatch");
+
+	ScopeLock lock(&Section);
+
 	auto pheader = (scratch_header_t*)WriteAddress; 
 	Check(is_aligned(WriteAddress, ALLOCATION_MIN_ALIGNMENT));
 	auto ptr = align_forward(pheader + 1, alignment);
@@ -264,25 +250,16 @@ void* ScratchAllocator::Allocate(size_t size, size_t alignment) {
 }
 
 void ScratchAllocator::Free(void* ptr) {
-	if (ThreadId >= 0) {
-		Check(ThreadId == GetThreadId());
-	}
-
 	if (ptr == nullptr) {
 		return;
 	}
 
 	if (ptr < SegmentBegin || SegmentEnd < ptr) {
-#if CHECK_SCRATCH_THREAD_AFFINITY
-		for (u32 i = 0; i < ScratchAllocatorsNum; ++i) {
-			bool contained = ptr >= ScratchAllocators[i]->SegmentBegin && ptr < ScratchAllocators[i]->SegmentEnd;
-			Check(!contained);
-		}
-#endif
-
 		BackingAllocator->Free(ptr);
 		return;
 	}
+
+	ScopeLock lock(&Section);
 	
 	auto pheader = find_header<scratch_header_t>(ptr);
 	Check(pheader + 1 <= ptr);

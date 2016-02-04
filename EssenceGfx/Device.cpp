@@ -1,5 +1,6 @@
 #include "Device.h"
 #include "Resources.h"
+#include "Application.h"
 
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -11,13 +12,14 @@ IDXGIFactory4*		GDXGIFactory;
 IDXGIAdapter3*		GDXGIAdapter;
 ID3D12Debug*		GDebugLayer;
 ID3D12Device*		GD12Device;
-IDXGISwapChain*		GSwapChain;
+IDXGISwapChain3*	GSwapChain;
 
 const u32			MaxSwapBuffersNum = 8;
 u32					SwapBuffersNum;
 u32					CurrentSwapBufferIndex;
 ID3D12Resource*		SwapChainBuffer[MaxSwapBuffersNum];
 HWND				GHWND;
+HANDLE				VBlankWaitable;
 
 const DXGI_FORMAT	BackbufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
@@ -175,7 +177,7 @@ void PrintAdapterInfo(IDXGIAdapter3* adapter) {
 		Megabytes(desc.SharedSystemMemory)));
 }
 
-void CreateSwapChain(ID3D12CommandQueue* queue, u32 buffersNum) {
+void CreateSwapChain(ID3D12CommandQueue* queue) {
 	for (auto i : i32Range(MaxSwapBuffersNum)) {
 		if (SwapChainBuffer[i]) {
 			SwapChainBuffer[i]->Release();
@@ -185,25 +187,29 @@ void CreateSwapChain(ID3D12CommandQueue* queue, u32 buffersNum) {
 
 	ComRelease(GSwapChain);
 
-	SwapBuffersNum = buffersNum;
-	Check(buffersNum <= MaxSwapBuffersNum);
+	SwapBuffersNum = GDisplaySettings.backbuffers_num;
+	Check(SwapBuffersNum <= MaxSwapBuffersNum);
 	CurrentSwapBufferIndex = 0;
 
 	DXGI_SWAP_CHAIN_DESC descSwapChain;
 	ZeroMemory(&descSwapChain, sizeof(descSwapChain));
-	descSwapChain.BufferCount = buffersNum;
+	descSwapChain.BufferCount = SwapBuffersNum;
 	descSwapChain.BufferDesc.Format = BackbufferFormat;
 	descSwapChain.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	descSwapChain.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	descSwapChain.OutputWindow = GHWND;
 	descSwapChain.SampleDesc.Count = 1;
 	descSwapChain.Windowed = TRUE;
-	descSwapChain.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+	descSwapChain.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
+	IDXGISwapChain* swapChain;
 	VerifyHr(GDXGIFactory->CreateSwapChain(
 		queue,
 		&descSwapChain,
-		&GSwapChain));
+		&swapChain));
+
+	VerifyHr(swapChain->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&GSwapChain));
+	swapChain->Release();
 
 	for (auto i : i32Range(SwapBuffersNum)) {
 		ID3D12Resource* resource;
@@ -212,10 +218,20 @@ void CreateSwapChain(ID3D12CommandQueue* queue, u32 buffersNum) {
 
 		RegisterSwapChainBuffer(resource, i);
 	}
+
+	VBlankWaitable = GSwapChain->GetFrameLatencyWaitableObject();
 }
 
-void Present(u32 vsync) {
-	VerifyHr(GSwapChain->Present(vsync, 0));
+void Present() {
+	{
+		PROFILE_SCOPE(wait_for_present);
+		VerifyHr(GSwapChain->Present(GDisplaySettings.vsync, 0));
+	}
+
+	if (GDisplaySettings.wait_to_vblank) {
+		PROFILE_SCOPE(wait_for_vblank);
+		WaitForSingleObject(VBlankWaitable, INFINITE);
+	}
 
 	CurrentSwapBufferIndex = (CurrentSwapBufferIndex + 1) % SwapBuffersNum;
 }
@@ -232,7 +248,7 @@ void ResizeSwapChain(u32 width, u32 height) {
 
 	Check(GSwapChain);
 
-	VerifyHr(GSwapChain->ResizeBuffers(SwapBuffersNum, width, height, BackbufferFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
+	VerifyHr(GSwapChain->ResizeBuffers(SwapBuffersNum, width, height, BackbufferFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT));
 
 	for (auto i : i32Range(SwapBuffersNum)) {
 		ID3D12Resource* resource;
@@ -258,6 +274,8 @@ DXGI_QUERY_VIDEO_MEMORY_INFO GetNonLocalMemoryInfo() {
 }
 
 void ShutdownDevice() {
+	Verify(CloseHandle(VBlankWaitable));
+
 	for (auto i : i32Range(MaxSwapBuffersNum)) {
 		if (SwapChainBuffer[i]) {
 			SwapChainBuffer[i]->Release();

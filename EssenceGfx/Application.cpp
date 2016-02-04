@@ -66,10 +66,47 @@ void ShutdownSDL(SDL_Window *sdlWindow) {
 	SDL_Quit();
 }
 
-void InitApplication(u32 windowWidth, u32 windowHeight, int vsync, ApplicationFlagsEnum flags) {
+void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum flags, ApplicationPresentProfileEnum profile) {
 	GDisplaySettings.resolution.x = windowWidth;
 	GDisplaySettings.resolution.y = windowHeight;
-	GDisplaySettings.vsync = vsync;
+
+	switch (profile) {
+	case APP_PRESENT_DEFAULT:
+		{
+			GDisplaySettings.vsync = 1;
+			GDisplaySettings.backbuffers_num = 3;
+			GDisplaySettings.max_gpu_buffered_frames = 3;
+			GDisplaySettings.wait_to_vblank = false;
+		}
+		break;
+	case APP_PRESENT_UNTHROTTLED:
+		{
+			GDisplaySettings.vsync = 0;
+			GDisplaySettings.backbuffers_num = 3;
+			GDisplaySettings.max_gpu_buffered_frames = 3;
+			GDisplaySettings.wait_to_vblank = false;
+		}
+		break;
+	case APP_PRESENT_LOWLATENCY:
+		{
+			GDisplaySettings.vsync = 1;
+			GDisplaySettings.backbuffers_num = 3;
+			GDisplaySettings.max_gpu_buffered_frames = 2;
+			GDisplaySettings.wait_to_vblank = true;
+		}
+		break;
+	case APP_PRESENT_VERYLOWLATENCY:
+		{
+			GDisplaySettings.vsync = 1;
+			GDisplaySettings.backbuffers_num = 2;
+			GDisplaySettings.max_gpu_buffered_frames = 1;
+			GDisplaySettings.wait_to_vblank = true;
+		}
+		break;
+	default:
+		Check(0);
+
+	}
 
 	InitMainThread();
 	InitProfiler();
@@ -78,14 +115,14 @@ void InitApplication(u32 windowWidth, u32 windowHeight, int vsync, ApplicationFl
 
 	InitSDL(&SDLWindow);
 
-	InitDevice(GDisplaySettings.hwnd, false, flags & APP_D3D12_DEBUG);
+	InitDevice(GDisplaySettings.hwnd, false, flags & APP_FLAG_D3D12_DEBUG);
 	InitRenderingEngines();
 	InitResources();
 
 	GGPUMainQueue = CreateQueue(TEXT_("3d_engine"), DIRECT_QUEUE);
 	GGPUCopyQueue = CreateQueue(TEXT_("copy_engine"), COPY_QUEUE);
 
-	CreateSwapChain(GetD12Queue(GGPUMainQueue), 3);
+	CreateSwapChain(GetD12Queue(GGPUMainQueue));
 
 	ImGuiIO& io = ImGui::GetIO();
 	io.KeyMap[ImGuiKey_Tab] = SDL_SCANCODE_TAB;
@@ -244,7 +281,7 @@ i32 RunApplicationMainLoop() {
 
 		GApplicationTickFunction(fDeltaTime);
 
-		EndCommandsFrame(GGPUMainQueue, 3);
+		EndCommandsFrame(GGPUMainQueue);
 	}
 
 	GApplicationShutdownFunction();

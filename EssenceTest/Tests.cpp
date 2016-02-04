@@ -117,7 +117,7 @@ void TestArray(int argc, char * argv[]) {
 		}
 		EXPECT(sum == 9);
 
-		auto C = Array<i32>(GetScratchAllocator());
+		auto C = Array<i32>(GetMallocAllocator());
 		for (auto i = 0; i < 1024 * 1024; ++i) {
 			PushBack(C, i);
 		}
@@ -384,120 +384,102 @@ void TestScheduler(int argc, char * argv[]) {
 }
 
 #if 1
-
-#include "JobScheduler.h"
-
-using namespace Essence;
-
-void child1(void*) {
-	for (int i = 0; i < 100; i++) {
-		_mm_pause();
-	}
-}
-
-void child(void*) {
-	for (int i = 0; i < 100; i++) {
-		_mm_pause();
-	}
-
-	job_desc_t jobs[32];
-	for (int i = 0; i < 32; ++i) {
-		jobs[i] = { child1, nullptr };
-	}
-	OutputDebugStringA("child pre\n");
-	WaitForCompletion(ScheduleJobs(jobs, 32));
-	OutputDebugStringA("child post\n");
-}
-
-void root(void*) {
-	job_desc_t jobs[32];
-	for (int i = 0; i < 32; ++i) {
-		jobs[i] = { child, nullptr };
-	}
-	OutputDebugStringA("root pre\n");
-	WaitForCompletion(ScheduleJobs(jobs, 32));
-	OutputDebugStringA("root post\n");
-	OutputDebugStringA("root pre\n");
-	WaitForCompletion(ScheduleJobs(jobs, 32));
-	OutputDebugStringA("root post\n");
-
-	job_desc_t jobs1[32];
-	for (int i = 0; i < 32; ++i) {
-		jobs1[i] = { child, nullptr };
-	}
-	OutputDebugStringA("root pre\n");
-	auto A = ScheduleJobs(jobs, 32);
-	auto B = ScheduleJobs(jobs1, 32);
-	WaitForCompletion(A);
-	WaitForCompletion(B);
-	OutputDebugStringA("root post\n");
-}
-
-struct root2_params {
-	u32 depth;
-};
-
-void root2(void* pVoidParams) {
-	u32 depth = *(u32*)pVoidParams;
-	
-	if (depth == 0) {
-		OutputDebugStringA("root pre\n");
-		job_desc_t jobs[32];
-		root2_params params[32];
-		for (int i = 0; i < 32; ++i) {
-			params[i].depth = 1;
-			jobs[i] = { root2, &params[i] };
-		}
-		WaitForCompletion(ScheduleJobs(jobs, 32));
-		OutputDebugStringA("root post\n");
-	}
-	else if (depth == 1) {
-		for (int i = 0; i < 10; ++i) {
-			_mm_pause();
-		}
-		job_desc_t jobs[32];
-		root2_params params[32];
-		for (int i = 0; i < 32; ++i) {
-			params[i].depth = 2;
-			jobs[i] = { root2, &params[i] };
-		}
-		OutputDebugStringA("child pre\n");
-		WaitForCompletion(ScheduleJobs(jobs, 32));
-		OutputDebugStringA("child post\n");
-	}
-	else if (depth == 2) {
-		for (int i = 0; i < 100; ++i) {
-			_mm_pause();
-		}
-	}
-}
+//
+//#include "JobScheduler.h"
+//
+//using namespace Essence;
+//
+//void child1(void*) {
+//	for (int i = 0; i < 100; i++) {
+//		_mm_pause();
+//	}
+//}
+//
+//void child(void*) {
+//	for (int i = 0; i < 100; i++) {
+//		_mm_pause();
+//	}
+//
+//	job_desc_t jobs[32];
+//	for (int i = 0; i < 32; ++i) {
+//		jobs[i] = { child1, nullptr };
+//	}
+//	OutputDebugStringA("child pre\n");
+//	WaitForCompletion(ScheduleJobs(jobs, 32));
+//	OutputDebugStringA("child post\n");
+//}
+//
+//void root(void*) {
+//	job_desc_t jobs[32];
+//	for (int i = 0; i < 32; ++i) {
+//		jobs[i] = { child, nullptr };
+//	}
+//	OutputDebugStringA("root pre\n");
+//	WaitForCompletion(ScheduleJobs(jobs, 32));
+//	OutputDebugStringA("root post\n");
+//	OutputDebugStringA("root pre\n");
+//	WaitForCompletion(ScheduleJobs(jobs, 32));
+//	OutputDebugStringA("root post\n");
+//
+//	job_desc_t jobs1[32];
+//	for (int i = 0; i < 32; ++i) {
+//		jobs1[i] = { child, nullptr };
+//	}
+//	OutputDebugStringA("root pre\n");
+//	auto A = ScheduleJobs(jobs, 32);
+//	auto B = ScheduleJobs(jobs1, 32);
+//	WaitForCompletion(A);
+//	WaitForCompletion(B);
+//	OutputDebugStringA("root post\n");
+//}
+//
+//struct root2_params {
+//	u32 depth;
+//};
+//
+//void root2(void* pVoidParams) {
+//	u32 depth = *(u32*)pVoidParams;
+//	
+//	if (depth == 0) {
+//		OutputDebugStringA("root pre\n");
+//		job_desc_t jobs[32];
+//		root2_params params[32];
+//		for (int i = 0; i < 32; ++i) {
+//			params[i].depth = 1;
+//			jobs[i] = { root2, &params[i] };
+//		}
+//		WaitForCompletion(ScheduleJobs(jobs, 32));
+//		OutputDebugStringA("root post\n");
+//	}
+//	else if (depth == 1) {
+//		for (int i = 0; i < 10; ++i) {
+//			_mm_pause();
+//		}
+//		job_desc_t jobs[32];
+//		root2_params params[32];
+//		for (int i = 0; i < 32; ++i) {
+//			params[i].depth = 2;
+//			jobs[i] = { root2, &params[i] };
+//		}
+//		OutputDebugStringA("child pre\n");
+//		WaitForCompletion(ScheduleJobs(jobs, 32));
+//		OutputDebugStringA("child post\n");
+//	}
+//	else if (depth == 2) {
+//		for (int i = 0; i < 100; ++i) {
+//			_mm_pause();
+//		}
+//	}
+//}
 
 int main(int argc, char * argv[]) {
+	Essence::InitMemoryAllocators();
 
-	/*TestArray(argc, argv);
+	TestArray(argc, argv);
 	TestHashmap(argc, argv);
 	TestCollections(argc, argv);
 	TestString(argc, argv);
-	TestScheduler(argc, argv);*/
-
-	Essence::InitMemoryAllocators();
-
-	
-
-	InitJobScheduler();
-
-	job_desc_t job = { root, nullptr };
-	auto waitable = ScheduleJobs(&job, 1);
-	WaitForCompletion(waitable);
-
-	root2_params params;
-	params.depth = 0;
-	job = { root2, &params };
-	WaitForCompletion(ScheduleJobs(&job, 1));
-
-	ShutdownJobScheduler();
-
-	OutputDebugStringA("scheduler shut");
+	TestScheduler(argc, argv);
 
 	Essence::ShutdownMemoryAllocators();
 

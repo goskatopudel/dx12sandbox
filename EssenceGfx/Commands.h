@@ -46,7 +46,7 @@ void						Execute(GPUCommandList*);
 
 void						WaitForCompletion(GPUFenceHandle);
 bool						IsFenceCompleted(GPUFenceHandle);
-void						EndCommandsFrame(GPUQueue* mainQueue, u32 limitGpuBufferedFrames = 0xFFFF);
+void						EndCommandsFrame(GPUQueue* mainQueue);
 void						QueueWait(GPUQueue* queue, GPUFenceHandle);
 
 void						RegisterResource(resource_handle src, D3D12_RESOURCE_STATES initialState);

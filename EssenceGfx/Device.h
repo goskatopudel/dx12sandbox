@@ -7,7 +7,6 @@
 
 namespace Essence {
 
-const u32						MaxGpuBufferedFrames = 4;
 const D3D_FEATURE_LEVEL			MinFeatureLevel = D3D_FEATURE_LEVEL_11_0;
 
 typedef D3D12_CPU_DESCRIPTOR_HANDLE	CPU_DESC_HANDLE;
@@ -23,9 +22,9 @@ extern i32						GD12DsvDescIncrement;
 void							InitDevice(HWND	hwnd, bool useWarpAdapter, bool enableDebugLayer);
 void							ShutdownDevice();
 
-void							CreateSwapChain(ID3D12CommandQueue* queue, u32 buffersNum);
+void							CreateSwapChain(ID3D12CommandQueue* queue);
 void							ResizeSwapChain(u32 width, u32 height);
-void							Present(u32 vsync);
+void							Present();
 
 DXGI_QUERY_VIDEO_MEMORY_INFO	GetLocalMemoryInfo();
 DXGI_QUERY_VIDEO_MEMORY_INFO	GetNonLocalMemoryInfo();

@@ -614,12 +614,12 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 }
 
 const u32			MAX_SWAP_BUFFERS = 8;
-resource_handle		GSwapChain[MAX_SWAP_BUFFERS];
+resource_handle		GSwapBuffers[MAX_SWAP_BUFFERS];
 
 void	DeregisterSwapChainBuffers() {
 	for (auto i : MakeRange(MAX_SWAP_BUFFERS)) {
-		if (IsValid(GSwapChain[i])) {
-			Delete(GSwapChain[i]);
+		if (IsValid(GSwapBuffers[i])) {
+			Delete(GSwapBuffers[i]);
 		}
 	}
 }
@@ -636,6 +636,7 @@ void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 	auto &Record = ResourcesTable[handle];
 	Record = {};
 	Record.resource = resource;
+	// we will call release when deleting entry & when shutting down device
 	resource->AddRef();
 	Record.debug_name = TEXT_(debugName);
 	Record.desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -650,12 +651,12 @@ void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 	ResourcesViews[handle.GetIndex()].rtv_locations = RTVDescHeap.Allocate(1);
 	GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations));
 
-	GSwapChain[index] = handle;
+	GSwapBuffers[index] = handle;
 }
 
 resource_handle			GetCurrentBackbuffer() {
 	extern u32 CurrentSwapBufferIndex;
-	return GSwapChain[CurrentSwapBufferIndex];
+	return GSwapBuffers[CurrentSwapBufferIndex];
 }
 
 void CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData);

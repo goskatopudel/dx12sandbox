@@ -294,7 +294,7 @@ int main(int argc, char * argv[]) {
 		CreateScreenResources();
 	};
 
-	InitApplication(1200, 768, 1, APP_D3D12_DEBUG);
+	InitApplication(1200, 768, APP_FLAG_NONE, APP_PRESENT_DEFAULT);
 
 	return RunApplicationMainLoop();
 }

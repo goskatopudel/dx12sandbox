@@ -281,7 +281,7 @@ void Tick(float fDeltaTime) {
 
 	{
 		PROFILE_SCOPE(wait_for_present);
-		Present(1);
+		Present();
 	}
 }
 
@@ -307,7 +307,7 @@ int main(int argc, char * argv[]) {
 		CreateScreenResources();
 	};
 
-	InitApplication(1200, 768, 1, APP_D3D12_DEBUG);
+	InitApplication(1200, 768, APP_FLAG_D3D12_DEBUG, APP_PRESENT_DEFAULT);
 
 	return RunApplicationMainLoop();
 }

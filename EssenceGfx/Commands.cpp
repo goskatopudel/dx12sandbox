@@ -5,6 +5,7 @@
 #include "Descriptors.h"
 #include "Ringbuffer.h"
 #include "Freelist.h"
+#include "Application.h"
 
 #include <d3d12shader.h>
 #include <d3dcompiler.h>
@@ -341,11 +342,11 @@ public:
 	Ringbuffer<sample_internal>				Samples;
 
 	static const u32						MaxPendingQueries = 64 * 1024;
-	static const u32						MaxQueuedFrames = 3;
+	static const u32						MAX_QUEUED_PROFILER_FRAMES = 3;
 	u32										ReadIndex;
 	u32										WriteIndex;
-	GPUFenceHandle							ReadFences[MaxQueuedFrames];
-	resource_handle							Readback[MaxQueuedFrames];
+	GPUFenceHandle							ReadFences[MAX_QUEUED_PROFILER_FRAMES];
+	resource_handle							Readback[MAX_QUEUED_PROFILER_FRAMES];
 
 	GPUProfiler() :
 		Fences(),
@@ -360,8 +361,8 @@ public:
 		queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
 		VerifyHr(GD12Device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(QueryHeap.GetInitPtr())));
 
-		for (u32 i = 0; i < MaxQueuedFrames; ++i) {
-			Readback[i] = CreateBuffer(READBACK_MEMORY, sizeof(u64) * (MaxPendingQueries + MaxQueuedFrames - 1) / MaxQueuedFrames, BUFFER_NO_FLAGS, "readback buffer");
+		for (u32 i = 0; i < MAX_QUEUED_PROFILER_FRAMES; ++i) {
+			Readback[i] = CreateBuffer(READBACK_MEMORY, sizeof(u64) * (MaxPendingQueries + MAX_QUEUED_PROFILER_FRAMES - 1) / MAX_QUEUED_PROFILER_FRAMES, BUFFER_NO_FLAGS, "readback buffer");
 			ReadFences[i] = {};
 		}
 
@@ -868,7 +869,9 @@ public:
 
 		Type = {};
 
+#if GPU_PROFILING
 		Sample = {};
+#endif
 	}
 
 	GPUCommandList(ResourceNameId usage, GPUCommandAllocator* allocator, GPUQueue *queue, GPUCommandListPool* pool)
@@ -1104,7 +1107,7 @@ void GPUProfiler::ResolveFrameProfilingQueries(GPUCommandList* list) {
 	PushBack(Fences, fence);
 
 	ReadFences[WriteIndex] = GetFence(list);
-	WriteIndex = (WriteIndex + 1) % MaxQueuedFrames;
+	WriteIndex = (WriteIndex + 1) % MAX_QUEUED_PROFILER_FRAMES;
 }
 
 void GPUProfiler::ReadbackAndFeedProfiler() {
@@ -1163,7 +1166,7 @@ void GPUProfiler::ReadbackAndFeedProfiler() {
 		writtenRange.End = 0;
 		readbackBuffer->Unmap(0, &writtenRange);
 
-		ReadIndex = (ReadIndex + 1) % MaxQueuedFrames;
+		ReadIndex = (ReadIndex + 1) % MAX_QUEUED_PROFILER_FRAMES;
 	}
 }
 
@@ -1605,11 +1608,12 @@ GPUQueue*		CreateQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex) {
 	return queue;
 }
 
-void EndCommandsFrame(GPUQueue* mainQueue, u32 limitGpuBufferedFrames) {
+void EndCommandsFrame(GPUQueue* mainQueue) {
+	u8 limitGpuBufferedFrames = GDisplaySettings.max_gpu_buffered_frames;
+
 	// fence read with last fence from queue(!)
 	GpuDescriptorsAllocator.FenceTemporaryAllocations(GetLastSignaledFence(mainQueue));
 	ConstantsAllocator.FenceTemporaryAllocations(GetLastSignaledFence(mainQueue));
-
 
 	auto frameFence = GetLastSignaledFence(mainQueue);
 

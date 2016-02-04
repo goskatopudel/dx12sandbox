@@ -33,7 +33,6 @@ private:
 void InitMemoryAllocators();
 void ShutdownMemoryAllocators();
 IAllocator* GetMallocAllocator();
-IAllocator* GetScratchAllocator();
 IAllocator* GetThreadScratchAllocator();
 void FreeThreadAllocator();
 

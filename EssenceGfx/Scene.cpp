@@ -160,7 +160,7 @@ void ParallelUpdateAnimationsRoot(const void* InArgs, Job* job) {
 void ParallelUpdateAnimations(Scene& Scene, float dt) {
 	PROFILE_SCOPE(update_anitmations);
 
-	Array<animation_h> workspace(GetScratchAllocator());
+	Array<animation_h> workspace(GetMallocAllocator());
 	Reserve(workspace, 512);
 
 	for (auto animHandle : Scene.AnimationStates.Keys()) {
@@ -168,7 +168,7 @@ void ParallelUpdateAnimations(Scene& Scene, float dt) {
 	}
 
 	auto animationsPerBatch = 128;
-	Array<ParallelUpdateAnimationsRange_Payload> childWorkspaces(GetScratchAllocator());
+	Array<ParallelUpdateAnimationsRange_Payload> childWorkspaces(GetMallocAllocator());
 	Reserve(childWorkspaces, Size(workspace) / animationsPerBatch + 1);
 
 	u32 N = (u32)Size(workspace);
@@ -288,7 +288,7 @@ void ParallelRenderScene(GPUQueue* queue, Scene &Scene, GPUCommandList* drawCmds
 
 	PROFILE_SCOPE(render_scene);
 
-	Array<scene_entity_h> workspace(GetScratchAllocator());
+	Array<scene_entity_h> workspace(GetMallocAllocator());
 	Reserve(workspace, 2048);
 
 	for (auto entityHandle : Scene.Entities.Keys()) {
@@ -296,7 +296,7 @@ void ParallelRenderScene(GPUQueue* queue, Scene &Scene, GPUCommandList* drawCmds
 	}
 
 	const auto objectsPerBatch = 128;
-	Array<ParallelRenderSceneRange_Payload> childWorkspaces(GetScratchAllocator());
+	Array<ParallelRenderSceneRange_Payload> childWorkspaces(GetMallocAllocator());
 	Reserve(childWorkspaces, Size(workspace) / objectsPerBatch + 1);
 
 	u32 N = (u32)Size(workspace);

@@ -221,12 +221,9 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="JobScheduler.h" />
     <ClInclude Include="lest.hpp" />
-    <ClInclude Include="LockFreeQueue.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="JobScheduler.cpp" />
     <ClCompile Include="Tests.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
