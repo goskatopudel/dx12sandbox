@@ -20,14 +20,20 @@ struct GPUFenceHandle {
 	u32	generation;
 };
 
+inline bool operator ==(GPUFenceHandle A, GPUFenceHandle B) {
+	return A.handle == B.handle && A.generation == B.generation;
+}
+
 inline bool operator !=(GPUFenceHandle A, GPUFenceHandle B) {
-	return A.handle != B.handle || A.generation == B.generation;
+	return A.handle != B.handle || A.generation != B.generation;
 }
 
 struct upload_allocation_t {
 	GPU_VIRTUAL_ADDRESS		virtual_address;
 	void*			write_ptr;
 };
+
+struct			viewport_t { float x, y, width, height, mindepth, maxdepth; };
 
 void						WaitForCompletion();
 void						InitRenderingEngines();
@@ -76,6 +82,7 @@ void						SetRasterizer(GPUCommandList*, D3D12_RASTERIZER_DESC const& desc);
 void						SetBlendState(GPUCommandList*, u32 index, D3D12_RENDER_TARGET_BLEND_DESC const& desc);
 void						SetDepthStencil(GPUCommandList*, resource_dsv_t);
 void						SetViewport(GPUCommandList*, float width, float height, float x = 0, float y = 0, float minDepth = 0, float maxDepth = 1);
+void						SetViewport(GPUCommandList*, viewport_t viewport);
 void						SetScissorRect(GPUCommandList* list, D3D12_RECT rect);
 void						Draw(GPUCommandList*, u32 vertexCount, u32 startVertex = 0, u32 instances = 1, u32 startInstance = 0);
 void						DrawIndexed(GPUCommandList*, u32 indexCount, u32 startIndex = 0, i32 baseVertex = 0, u32 instances = 1, u32 startInstance = 0);
@@ -93,6 +100,26 @@ template<typename T> void	SetConstant(GPUCommandList* list, TextId var, T const&
 
 void						GetD3D12StateDefaults(D3D12_RASTERIZER_DESC *pDest);
 void						UpdatePipelineStates();
+
+
+struct commands_stats_t {
+	u32 graphic_pipeline_state_changes;
+	u32 graphic_root_signature_changes;
+	u32 draw_calls;
+	u32 compute_pipeline_state_changes;
+	u32 compute_root_signature_changes;
+	u32 dispatches;
+	u64 constants_bytes_uploaded;
+};
+
+struct d12_stats_t {
+	commands_stats_t	command_stats;
+	u32					executions_num;
+	u32					command_lists_num;
+	u32					patchup_command_lists_num;
+};
+
+d12_stats_t const*			GetLastFrameStats();
 
 #define GPU_PROFILE_BEGIN(cl, name)                                                \
     RMT_OPTIONAL(RMT_ENABLED, {                                                     \

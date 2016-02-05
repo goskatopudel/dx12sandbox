@@ -1,21 +1,16 @@
 #include "Essence.h"
 #include "EssenceGfx.h"
-
 #include <DirectXMath.h>
 #include "Camera.h"
-
 #include "Model.h"
 #include "UIRendering.h"
 #include "imgui/imgui.h"
 #include "Shader.h"
 #include "StatWindows.h"
-
 #include "Hashmap.h"
-
-#include "Scene.h"
 #include "Random.h"
-
 #include "SDL.h"
+#include "Scene.h"
 
 #pragma comment(lib,"SDL2main.lib")
 
@@ -105,6 +100,40 @@ void Init() {
 	CreateTestScene(testScene, 100);
 }
 
+void ShowStatsWindow() {
+	ImGui::Begin("Stats");
+
+	auto stats = GetLastFrameStats();
+
+	ImGui::BulletText("Command lists");
+	ImGui::Indent();
+	ImGui::Text("All / Patchup / Executions: %u / %u / %u", stats->command_lists_num, stats->patchup_command_lists_num, stats->executions_num);
+	ImGui::Unindent();
+
+	ImGui::Separator();
+
+	ImGui::BulletText("Commands");
+	ImGui::Indent();
+	ImGui::Text("Graphics");
+	ImGui::Text("PSO changes:\nRootSignature changes:\nDrawcalls:"); ImGui::SameLine();
+	ImGui::Text("%u\n%u\n%u", 
+		stats->command_stats.graphic_pipeline_state_changes,
+		stats->command_stats.graphic_root_signature_changes,
+		stats->command_stats.draw_calls);
+
+	ImGui::Text("Compute");
+	ImGui::Text("PSO changes:\nRootSignature changes:\nDispatches:"); ImGui::SameLine();
+	ImGui::Text("%u\n%u\n%u",
+		stats->command_stats.compute_pipeline_state_changes,
+		stats->command_stats.compute_root_signature_changes,
+		stats->command_stats.dispatches);
+
+	ImGui::Text("Common");
+	ImGui::Text("Constants: %llu Kb", Kilobytes(stats->command_stats.constants_bytes_uploaded));
+	ImGui::Unindent();
+
+	ImGui::End();
+}
 
 void Tick(float fDeltaTime) {
 
@@ -174,6 +203,7 @@ void Tick(float fDeltaTime) {
 	ImGui::ShowTestWindow();
 
 	ShowMemoryInfo();
+	ShowStatsWindow();
 
 	ShowSceneWidget(testScene);
 
@@ -188,10 +218,10 @@ void Tick(float fDeltaTime) {
 		auto drawList = GetCommandList(GGPUMainQueue, NAME_("RenderWork"));
 		auto copyList = GetCommandList(GGPUCopyQueue, NAME_("CopyWork"));
 
-		ClearRenderTarget(drawList, Slice(RT_A), float4(0.5f, 0.5f, 0.5f, 1));
-		ClearDepthStencil(drawList, Slice(DepthBuffer));
+		ClearRenderTarget(drawList, GetRTV(RT_A), float4(0.5f, 0.5f, 0.5f, 1));
+		ClearDepthStencil(drawList, GetDSV(DepthBuffer));
 		SetShaderState(drawList, SHADER_(Utility, VShader, VS_5_1), SHADER_(Utility, ColorPS, PS_5_1), {});
-		SetRenderTarget(drawList, 0, Slice(RT_A));
+		SetRenderTarget(drawList, 0, GetRTV(RT_A));
 		SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 		SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		static float x = 0;
@@ -199,48 +229,22 @@ void Tick(float fDeltaTime) {
 		auto fx = x * 3.14f;
 		fx = fx > DirectX::XM_2PI ? fx - DirectX::XM_2PI : fx;
 		auto color = DirectX::XMColorRGBToSRGB(toSimd(float4(sinf(fx) * 0.5f + 0.5f, 0.001f, 0.001f, 1)));
-		color = DirectX::XMVectorSet(0, 0, 0, 1);
+		//color = DirectX::XMVectorSet(0, 0, 0, 1);
 
 		SetConstant(drawList, TEXT_("WriteColor"), color);
 		Draw(drawList, 3);
 
 		UpdateScene(testScene, fDeltaTime);
-		//RenderScene(testScene, drawList, &FpsCamera);
-
-		/*struct vertex_t {
-		float4 position;
-		float2 texcoord;
-		};
-
-		vertex_t vertices[] = {
-		{ float4(0,0,0.999f,1) , float2(0,0) },
-		{ float4(0,1,0.999f,1) , float2(1,0) },
-		{ float4(1,0,0.999f,1) , float2(0,1) },
-		{ float4(1,0,0.999f,1) , float2(0,0) },
-		{ float4(0,1,0.999f,1) , float2(1,0) },
-		{ float4(1,1,0.999f,1) , float2(0,1) }
-		};
-
-		auto VB = AllocateSmallUploadMemory(drawList, sizeof(vertices), 16);
-		buffer_location_t vb_location;
-		vb_location.address = VB.virtual_address;
-		vb_location.stride = sizeof(vertex_t);
-		vb_location.size = sizeof(vertices);
-		memcpy(VB.write_ptr, &vertices, sizeof(vertices));
-
-		SetShaderState(drawList, SHADER_(Test, VShader, VS_5_1), SHADER_(Test, ColorPS, PS_5_1), QuadVertex);
-		SetViewport(drawList, 1200, 768);
-		SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		SetRenderTarget(drawList, 0, Slice(RT_A));
-		SetDepthStencil(drawList, Slice(DepthBuffer));
-		SetVertexStream(drawList, 0, vb_location);
-		Draw(drawList, 6);*/
 
 		auto clearFinished = GetFence(drawList);
 		Execute(drawList);
 
-		auto lastFence = ParallelRenderScene(GGPUMainQueue, testScene, drawList, &FpsCamera);
-		lastFence = lastFence.generation ? lastFence : clearFinished;
+		forward_render_scene_setup setup = {};
+		setup.buffer = RT_A;
+		setup.depthbuffer = DepthBuffer;
+		setup.pcamera = &FpsCamera;
+		setup.viewport = {  };
+		ParallelRenderScene(GGPUMainQueue, testScene, &setup);
 
 		QueueWait(GGPUCopyQueue, GetFence(GGPUMainQueue));
 		CopyResource(copyList, RT_B, RT_A);
@@ -250,17 +254,14 @@ void Tick(float fDeltaTime) {
 		QueueWait(GGPUMainQueue, copyFinished);
 		CopyResource(drawList, GetCurrentBackbuffer(), RT_B);
 
-		auto drawUiCommands = RenderUserInterface(GGPUMainQueue);
+		RenderUserInterface(drawList);
 		Execute(drawList);
-		Execute(drawUiCommands);
 
 		{
-			PROFILE_SCOPE(wait_for_present);
-			Present(1);
+			Present();
 		}
 	}
 	else {
-
 		auto drawList = GetCommandList(GGPUMainQueue, NAME_("RenderWork"));
 		auto copyList = GetCommandList(GGPUCopyQueue, NAME_("CopyWork"));
 		if (copyAtoB) {
@@ -294,7 +295,7 @@ int main(int argc, char * argv[]) {
 		CreateScreenResources();
 	};
 
-	InitApplication(1200, 768, APP_FLAG_NONE, APP_PRESENT_DEFAULT);
+	InitApplication(1200, 768, APP_FLAG_D3D12_DEBUG, APP_PRESENT_LOWLATENCY);
 
 	return RunApplicationMainLoop();
 }

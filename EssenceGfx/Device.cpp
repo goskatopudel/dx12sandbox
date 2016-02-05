@@ -224,6 +224,7 @@ void CreateSwapChain(ID3D12CommandQueue* queue) {
 
 	if (GDisplaySettings.wait_to_vblank) {
 		VBlankWaitable = GSwapChain->GetFrameLatencyWaitableObject();
+		VerifyHr(GSwapChain->SetMaximumFrameLatency(GDisplaySettings.max_gpu_buffered_frames));
 	}
 }
 
@@ -235,7 +236,8 @@ void Present() {
 
 	if (GDisplaySettings.wait_to_vblank) {
 		PROFILE_SCOPE(wait_for_vblank);
-		WaitForSingleObject(VBlankWaitable, INFINITE);
+		auto result = WaitForSingleObject(VBlankWaitable, INFINITE);
+		Check(result == WAIT_OBJECT_0);
 	}
 
 	CurrentSwapBufferIndex = (CurrentSwapBufferIndex + 1) % SwapBuffersNum;

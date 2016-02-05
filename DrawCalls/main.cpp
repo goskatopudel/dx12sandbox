@@ -13,9 +13,14 @@
 
 #pragma comment(lib,"SDL2main.lib")
 
+#include <DirectXMath.h>
+using namespace DirectX;
+
 using namespace Essence;
 
 resource_handle RT_A;
+resource_handle DepthBuffer;
+
 FirstPersonCamera FpsCamera;
 ICameraControler *CameraControlerPtr = &FpsCamera;
 
@@ -28,11 +33,31 @@ void CreateScreenResources() {
 	auto y = GDisplaySettings.resolution.y;
 
 	RT_A = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "rt0", float4(0.5f, 0.5f, 0.5f, 1));
+	DepthBuffer = CreateTexture(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth_buffer");
 }
+
+struct render_data_t {
+	float3			position;
+	float4			qrotation;
+	float3			scale;
+	model_handle	model;
+};
+
+model_handle cubemodel;
+model_handle cylindermodel;
+model_handle icosahedronmodel;
+model_handle torusmodel;
+model_handle tubemodel;
 
 void Init() {
 	CreateScreenResources();
 	FpsCamera.setup(float3(0, 0, -50), float3(0, 0, 1));
+
+	cubemodel			= GetModel(NAME_("Models/cube.obj"));
+	cylindermodel		= GetModel(NAME_("Models/cylinder.fbx"));
+	icosahedronmodel	= GetModel(NAME_("Models/icosa.hedron.fbx"));
+	torusmodel			= GetModel(NAME_("Models/torus.fbx"));
+	tubemodel			= GetModel(NAME_("Models/tube.fbx"));
 }
 
 void Tick(float fDeltaTime) {
@@ -107,10 +132,59 @@ void Tick(float fDeltaTime) {
 	PROFILE_END; // ui logic
 
 	auto drawList = GetCommandList(GGPUMainQueue, NAME_("RenderWork"));
-
 	ClearRenderTarget(drawList, GetRTV(RT_A), float4(0.5f, 0.5f, 0.5f, 1));
-	CopyResource(drawList, GetCurrentBackbuffer(), RT_A);
+	ClearDepthStencil(drawList, GetDSV(DepthBuffer));
 
+	float3 scale = float3(10, 10, 10);
+	float4 qrotation = float4(0, 0, 0, 1);
+	float3 position = float3(0, 0, 0);
+
+	auto worldMatrix = XMMatrixTranspose(
+		XMMatrixAffineTransformation(
+			XMLoadFloat3((XMFLOAT3*)&scale),
+			XMVectorZero(),
+			XMLoadFloat4((XMFLOAT4*)&qrotation),
+			XMLoadFloat3((XMFLOAT3*)&position)
+			));
+
+	auto viewProjMatrix = XMMatrixTranspose(
+		CameraControlerPtr->GetViewMatrix()
+		* XMMatrixPerspectiveFovLH(3.14f * 0.25f, (float)GDisplaySettings.resolution.x / (float)GDisplaySettings.resolution.y, 0.01f, 1000.f));
+
+	auto renderData = GetModelRenderData(icosahedronmodel);
+
+	for (auto i : MakeRange(renderData->submeshes.num)) {
+		SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
+		SetRenderTarget(drawList, 0, GetRTV(RT_A));
+		SetDepthStencil(drawList, GetDSV(DepthBuffer));
+		SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
+		SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+		SetConstant(drawList, TEXT_("World"), worldMatrix);
+		SetConstant(drawList, TEXT_("ViewProj"), viewProjMatrix);
+
+		buffer_location_t vb;
+		vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
+		vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
+		vb.stride = sizeof(mesh_vertex_t);
+
+		SetVertexStream(drawList, 0, vb);
+
+		buffer_location_t ib;
+		ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
+		ib.size = renderData->indices_num * sizeof(u32);
+		ib.stride = sizeof(u32);
+
+		SetIndexBuffer(drawList, ib);
+
+		auto submesh = renderData->submeshes[i];
+		DrawIndexed(drawList, submesh.index_count, submesh.start_index, submesh.base_vertex);
+	}
+
+	CopyResource(drawList, GetCurrentBackbuffer(), RT_A);
+	/*Execute(drawList);
+	drawList = GetCommandList(GGPUMainQueue, NAME_("RenderWork"));*/
+	
 	RenderUserInterface(drawList);
 	Execute(drawList);
 

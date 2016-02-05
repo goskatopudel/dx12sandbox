@@ -48,15 +48,13 @@ void			MirrorAnimation(Scene& Scene, scene_entity_h dstEntity, scene_entity_h sr
 void			UpdateAnimations(Scene& Scene, float dt);
 void			UpdateScene(Scene &Scene, float dt);
 
-struct render_scene_setup {
-	float				width;
-	float				height;
-	float				x;
-	float				y;
-	resource_handle		target;
+struct forward_render_scene_setup {
+	viewport_t			viewport;
 	ICameraControler*	pcamera;
+	resource_handle		buffer;
+	resource_handle		depthbuffer;
 };
 
-void			RenderScene(Scene &Scene, GPUCommandList* drawCmds, render_scene_setup const* Setup);
-void			ParallelRenderScene(GPUQueue*, Scene &Scene, GPUCommandList* drawCmds, render_scene_setup const* Setup);
+void			RenderScene(Scene &Scene, GPUCommandList* drawCmds, forward_render_scene_setup const* Setup);
+void			ParallelRenderScene(GPUQueue*, Scene &Scene, forward_render_scene_setup const* Setup);
 }

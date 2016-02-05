@@ -71,7 +71,7 @@ void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum fla
 	GDisplaySettings.resolution.y = windowHeight;
 
 	switch (profile) {
-	case APP_PRESENT_DEFAULT:
+	case APP_PRESENT_THROUGHPUT:
 		{
 			GDisplaySettings.vsync = 1;
 			GDisplaySettings.backbuffers_num = 3;

@@ -14,11 +14,23 @@
 #include "remotery\Remotery.h"
 
 #define GPU_PROFILING 1
+#define COLLECT_RENDER_STATS 1
 
 namespace Essence {
 
 const bool GVerbosePipelineStates = false;
 const bool GVerboseRootSingatures = false;
+
+commands_stats_t& operator += (commands_stats_t& lhs, commands_stats_t const& rhs) {
+	lhs.graphic_pipeline_state_changes +=	rhs.graphic_pipeline_state_changes;
+	lhs.graphic_root_signature_changes +=	rhs.graphic_root_signature_changes;
+	lhs.draw_calls +=						rhs.draw_calls;
+	lhs.compute_pipeline_state_changes +=	rhs.compute_pipeline_state_changes;
+	lhs.compute_root_signature_changes +=	rhs.compute_root_signature_changes;
+	lhs.dispatches +=						rhs.dispatches;
+	lhs.constants_bytes_uploaded +=			rhs.constants_bytes_uploaded;
+	return lhs;
+}
 
 enum PipelineTypeEnum {
 	PIPELINE_UNKNOWN,
@@ -486,6 +498,9 @@ DescriptorAllocator			GpuDescriptorsAllocator;
 GPUFenceHandle				CreateFence(GPUQueue* queue);
 Ringbuffer<GPUFenceHandle>	FrameFences;
 
+d12_stats_t					LastFrameStats;
+d12_stats_t					FrameStats;
+
 void				InitRenderingEngines() {
 	GpuDescriptorsAllocator = std::move(DescriptorAllocator(512 * 1024, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true));
 	ConstantsAllocator = std::move(UploadHeapAllocator());
@@ -810,6 +825,9 @@ public:
 #if GPU_PROFILING
 	gpu_sample					Sample;
 #endif
+#if COLLECT_RENDER_STATS
+	commands_stats_t			Stats;
+#endif
 	//
 	struct {
 		Array<CPU_DESC_HANDLE>					DstDescRanges;
@@ -871,6 +889,9 @@ public:
 
 #if GPU_PROFILING
 		Sample = {};
+#endif
+#if COLLECT_RENDER_STATS
+		Stats = {};
 #endif
 	}
 
@@ -1230,6 +1251,10 @@ void Execute(GPUCommandList* list) {
 	list->Queue->Profiler->GatherListSamples(&list->ProfilerContext.Samples);
 	Check(Size(list->ProfilerContext.Samples) == 0);
 #endif
+#if COLLECT_RENDER_STATS
+	FrameStats.command_stats += list->Stats;
+	FrameStats.command_lists_num++;
+#endif
 
 	if (list->State == CL_RECORDING) {
 		Close(list);
@@ -1251,7 +1276,6 @@ void Execute(GPUCommandList* list) {
 		barrier.Transition.StateAfter = after;
 		PushBack(patchupBarriers, barrier);
 	};
-
 
 	for (auto kv : list->ResourcesStateTracker.ExpectedState) {
 		if (kv.value.per_subresource_tracking == 0) {
@@ -1367,191 +1391,6 @@ void Execute(GPUCommandList* list) {
 		}
 	}
 
-	//for (auto kv : list->ResourcesStateTracker.ExpectedSubresourceState) {
-	//	if (GResourceState[kv.key.handle].per_subresource_tracking == 0) {
-	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key.handle].resource_state;
-	//		auto expected = (D3D12_RESOURCE_STATES)kv.value;
-	//		Check(kv.key.subresource > 0);
-
-	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key.handle)->heap_type, before, expected)) {
-	//			auto after = GetNextState(list->Queue->Type, before, expected);
-
-	//			D3D12_RESOURCE_BARRIER barrier;
-	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	//			barrier.Transition.pResource = GetResourceFast(kv.key.handle)->resource;
-	//			barrier.Transition.Subresource = kv.key.subresource - 1;
-	//			barrier.Transition.StateBefore = before;
-	//			barrier.Transition.StateAfter = after;
-	//			PushBack(patchupBarriers, barrier);
-
-	//			GSubresourceState[kv.key] = after;
-	//			// todo: defer
-	//			GResourceState[kv.key.handle].per_subresource_tracking = 1;
-	//			Check(0);
-	//		}
-	//	}
-	//	else {
-	//		auto pSubresState = Get(GSubresourceState, kv.key);
-
-	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key.handle].resource_state;
-	//		if (pSubresState) {
-	//			before = *pSubresState;
-	//		}
-	//		auto expected = (D3D12_RESOURCE_STATES)kv.value;
-
-	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key.handle)->heap_type, before, expected)) {
-	//			auto after = GetNextState(list->Queue->Type, before, expected);
-
-	//			D3D12_RESOURCE_BARRIER barrier;
-	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	//			barrier.Transition.pResource = GetResourceFast(kv.key.handle)->resource;
-	//			barrier.Transition.Subresource = kv.key.subresource - 1;
-	//			barrier.Transition.StateBefore = before;
-	//			barrier.Transition.StateAfter = after;
-	//			PushBack(patchupBarriers, barrier);
-
-	//			GSubresourceState[kv.key] = after;
-	//		}
-	//	}
-	//}
-
-	//for (auto kv : list->ResourcesStateTracker.ExpectedState) {
-	//	auto key = kv.key;
-
-	//	if (kv.value.per_subresource_tracking == 0 && GResourceState[kv.key].per_subresource_tracking == 0) {
-	//		Check(kv.value.resource_state != RESOURCE_STATE_UNKNOWN);
-	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
-	//		auto expected = (D3D12_RESOURCE_STATES)kv.value.resource_state;
-
-	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, before, expected)) {
-	//			auto after = GetNextState(list->Queue->Type, before, expected);
-
-	//			D3D12_RESOURCE_BARRIER barrier;
-	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	//			barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
-	//			barrier.Transition.Subresource = -1;
-	//			barrier.Transition.StateBefore = before;
-	//			barrier.Transition.StateAfter = after;
-	//			PushBack(patchupBarriers, barrier);
-
-	//			GResourceState[kv.key].resource_state = after;
-	//		}
-	//	}
-	//	else if(kv.value.per_subresource_tracking == 0) {
-	//		Check(kv.value.resource_state != RESOURCE_STATE_UNKNOWN);
-	//		Check(GResourceState[kv.key].per_subresource_tracking != 0);
-
-	//		auto subresNum = GetResourceInfo(kv.key)->subresources_num;
-	//		resource_slice_t query = {};
-	//		query.handle = kv.key;
-	//		for (auto subresIndex : MakeRange(subresNum)) {
-	//			query.subresource = subresIndex + 1;
-
-	//			auto pSubresState = Get(GSubresourceState, query);
-	//			if (pSubresState && NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, *pSubresState, (D3D12_RESOURCE_STATES)kv.value.resource_state)) {
-	//				auto before = *pSubresState;
-	//				auto after = GetNextState(list->Queue->Type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state);
-
-	//				D3D12_RESOURCE_BARRIER barrier;
-	//				barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	//				barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	//				barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
-	//				barrier.Transition.Subresource = subresIndex;
-	//				barrier.Transition.StateBefore = before;
-	//				barrier.Transition.StateAfter = after;
-	//				PushBack(patchupBarriers, barrier);
-	//			}
-	//			if (pSubresState) {
-	//				Remove(GSubresourceState, query);
-	//			}
-	//		}
-
-	//		auto before = (D3D12_RESOURCE_STATES)kv.value.resource_state;
-	//		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state)) {
-	//			auto after = GetNextState(list->Queue->Type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state);
-
-	//			D3D12_RESOURCE_BARRIER barrier;
-	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	//			barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
-	//			barrier.Transition.Subresource = -1;
-	//			barrier.Transition.StateBefore = before;
-	//			barrier.Transition.StateAfter = after;
-	//			PushBack(patchupBarriers, barrier);
-
-	//			GResourceState[kv.key].resource_state = after;
-	//		}
-
-	//		GResourceState[kv.key].per_subresource_tracking = 0;
-	//	}
-	//	else {
-	//		Check(kv.value.per_subresource_tracking == 1);
-
-	//		// subresources were already transitioned
-	//		auto before = (D3D12_RESOURCE_STATES)GResourceState[kv.key].resource_state;
-	//		if (kv.value.resource_state != RESOURCE_STATE_UNKNOWN && NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(key)->heap_type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state)) {
-	//			auto after = GetNextState(list->Queue->Type, before, (D3D12_RESOURCE_STATES)kv.value.resource_state);
-
-	//			Check(after == (D3D12_RESOURCE_STATES)kv.value.resource_state);
-
-	//			D3D12_RESOURCE_BARRIER barrier;
-	//			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	//			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	//			barrier.Transition.pResource = GetResourceFast(kv.key)->resource;
-	//			barrier.Transition.Subresource = -1;
-	//			barrier.Transition.StateBefore = before;
-	//			barrier.Transition.StateAfter = after;
-	//			PushBack(patchupBarriers, barrier);
-
-	//			GResourceState[kv.key].resource_state = after;
-	//			GResourceState[kv.key].per_subresource_tracking = 0;
-	//		}
-	//	}
-	//}
-
-	// A: we expect whole res in state Y, whole rs in state X
-	// B: we expect whole res in Y, some subres in X
-	// C: we expect subres in Y, whole res in X
-	// D: we expect subres in Y, subres in X
-/*
-	for (auto kv : list->ResourcesStateTracker.ExpectedState) {
-		auto key = kv.key;
-
-		const auto pCurrent = Get(GResourceState, kv.key);
-		if (kv.value.per_subresource_tracking == 0) {
-			current.per_subresource_tracking
-		}
-
-		auto state = GResourceState[kv.key];
-		auto expectedState = kv.value;
-
-		if (state.state == D3D12_RESOURCE_STATE_RENDER_TARGET && list->Queue->Type == COPY_QUEUE) {
-			state.state = D3D12_RESOURCE_STATE_COMMON;
-		}
-
-		auto before = state.state;
-		auto after = expectedState.state;
-
-		if (NeedStateChange(list->Queue->Type, GetResourceTransitionInfo(kv.key.handle)->heap_type, before, after)) {
-			D3D12_RESOURCE_BARRIER barrier;
-			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-			barrier.Transition.pResource = GetResourceFast(kv.key.handle)->resource;
-			barrier.Transition.Subresource = key.subresource - 1;
-			barrier.Transition.StateBefore = before;
-			barrier.Transition.StateAfter = GetNextState(list->Queue->Type , before, after);
-
-			PushBack(patchupBarriers, barrier);
-		}
-	}
-
-	for (auto kv : list->ResourcesStateTracker.ResourceState) {
-		Set(GResourceStates, kv.key, kv.value);
-	}*/
-
 	Array<ID3D12CommandList*> executionList(GetThreadScratchAllocator());
 
 	GPUCommandList* patchupList = nullptr;
@@ -1562,6 +1401,10 @@ void Execute(GPUCommandList* list) {
 		patchupList->State = CL_CLOSED;
 
 		PushBack(executionList, (ID3D12CommandList*)*patchupList->D12CommandList);
+#if COLLECT_RENDER_STATS
+		FrameStats.command_lists_num++;
+		FrameStats.patchup_command_lists_num++;
+#endif
 	}
 
 	PushBack(executionList, (ID3D12CommandList*) *list->D12CommandList);
@@ -1570,6 +1413,10 @@ void Execute(GPUCommandList* list) {
 
 	queue->D12CommandQueue->ExecuteCommandLists((u32)Size(executionList), executionList.DataPtr);
 	queue->AdvanceFence();
+
+#if COLLECT_RENDER_STATS
+	FrameStats.executions_num++;
+#endif
 
 	queue->LastSignaledFence = list->Fence;
 	
@@ -1631,6 +1478,11 @@ void EndCommandsFrame(GPUQueue* mainQueue) {
 
 	GpuDescriptorsAllocator.FreeTemporaryAllocations();
 	ConstantsAllocator.FreeTemporaryAllocations();
+
+#if COLLECT_RENDER_STATS
+	LastFrameStats = FrameStats;
+	FrameStats = {};
+#endif
 }
 
 void WaitForCompletion(GPUQueue* queue, u64 fenceValue) {
@@ -2630,6 +2482,9 @@ void SetRootParams(GPUCommandList* list) {
 		GD12Device->CreateConstantBufferView(&cbvDesc, offseted_handle(list->Root.Params[cb.param_hash].binding.table.cpu_handle, cb.table_slot, GD12CbvSrvUavDescIncrement));
 
 		memcpy(allocation.write_ptr, kv.value.write_ptr, cb.bytesize);
+#if COLLECT_RENDER_STATS
+		list->Stats.constants_bytes_uploaded+=cb.bytesize;
+#endif
 	}
 
 	list->D12CommandList->SetDescriptorHeaps(1, &GpuDescriptorsAllocator.D12DescriptorHeap.Ptr);
@@ -2872,6 +2727,15 @@ void SetViewport(GPUCommandList* list, float width, float height, float x, float
 	list->Graphics.Viewport.MaxDepth = maxDepth;
 }
 
+void SetViewport(GPUCommandList* list, viewport_t vp) {
+	list->Graphics.Viewport.TopLeftX = vp.x;
+	list->Graphics.Viewport.TopLeftY = vp.y;
+	list->Graphics.Viewport.Width = vp.width;
+	list->Graphics.Viewport.Height = vp.height;
+	list->Graphics.Viewport.MinDepth = vp.mindepth;
+	list->Graphics.Viewport.MaxDepth = vp.maxdepth;
+}
+
 void SetScissorRect(GPUCommandList* list, D3D12_RECT rect) {
 	list->Graphics.ScissorRect = rect;
 }
@@ -2910,8 +2774,14 @@ void PreDraw(GPUCommandList* list) {
 	d12cl->RSSetScissorRects(1, &list->Graphics.ScissorRect);
 
 	d12cl->SetGraphicsRootSignature(list->Bindings->RootSignature);
+#if COLLECT_RENDER_STATS
+	list->Stats.graphic_root_signature_changes++;
+#endif
 	SetRootParams(list);
 	d12cl->SetPipelineState(pipelineState);
+#if COLLECT_RENDER_STATS
+	list->Stats.graphic_pipeline_state_changes++;
+#endif
 	d12cl->IASetPrimitiveTopology(list->Graphics.Topology);
 	d12cl->IASetVertexBuffers(0, list->Graphics.VertexStreamsNum, list->Graphics.VertexStreams);
 
@@ -2942,12 +2812,18 @@ void PostDraw(GPUCommandList* list) {
 
 void Draw(GPUCommandList* list, u32 vertexCount, u32 startVertex, u32 instances, u32 startInstance)  {
 	PreDraw(list);
+#if COLLECT_RENDER_STATS
+	list->Stats.draw_calls++;
+#endif
 	list->D12CommandList->DrawInstanced(vertexCount, instances, startVertex, startInstance);
 	PostDraw(list);
 }
 
 void DrawIndexed(GPUCommandList* list, u32 indexCount, u32 startIndex, i32 baseVertex, u32 instances, u32 startInstance) {
 	PreDraw(list);
+#if COLLECT_RENDER_STATS
+	list->Stats.draw_calls++;
+#endif
 	list->D12CommandList->DrawIndexedInstanced(indexCount, instances, startIndex, baseVertex, startInstance);
 	PostDraw(list);
 }
@@ -2966,8 +2842,14 @@ void PreDispatch(GPUCommandList* list) {
 	auto pipelineState = GetPipelineState(&query);
 
 	d12cl->SetComputeRootSignature(list->Bindings->RootSignature);
+#if COLLECT_RENDER_STATS
+	list->Stats.compute_root_signature_changes++;
+#endif
 	SetRootParams(list);
 	d12cl->SetPipelineState(pipelineState);
+#if COLLECT_RENDER_STATS
+	list->Stats.compute_pipeline_state_changes++;
+#endif
 
 	list->ResourcesStateTracker.FireBarriers();
 }
@@ -2978,6 +2860,9 @@ void PostDispatch(GPUCommandList* list) {
 
 void Dispatch(GPUCommandList* list, u32 threadGroupX, u32 threadGroupY, u32 threadGroupZ) {
 	PreDispatch(list);
+#if COLLECT_RENDER_STATS
+	list->Stats.dispatches++;
+#endif
 	list->D12CommandList->Dispatch(threadGroupX, threadGroupY, threadGroupZ);
 	PostDispatch(list);
 }
@@ -3191,6 +3076,10 @@ void ShutdownRenderingEngines() {
 	FreeMemory(GPUQueues);
 	FreeMemory(GResourceState);
 	FreeMemory(GSubresourceState);
+}
+
+d12_stats_t const* GetLastFrameStats() {
+	return &LastFrameStats;
 }
 
 }

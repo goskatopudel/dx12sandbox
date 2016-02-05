@@ -1,20 +1,14 @@
 #include "Essence.h"
 #include "EssenceGfx.h"
-
 #include <DirectXMath.h>
 #include "Camera.h"
-
 #include "Model.h"
 #include "UIRendering.h"
 #include "imgui/imgui.h"
 #include "Shader.h"
 #include "StatWindows.h"
-
 #include "Hashmap.h"
-
-#include "Scene.h"
 #include "Random.h"
-
 #include "SDL.h"
 
 #pragma comment(lib,"SDL2main.lib")

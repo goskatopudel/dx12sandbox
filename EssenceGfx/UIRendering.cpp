@@ -98,6 +98,8 @@ void RenderImDrawLists(ImDrawData *draw_data) {
 	blendMode.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
 	SetBlendState(cmdList, 0, blendMode);
+	SetRenderTarget(cmdList, 0, GetRTV(GetCurrentBackbuffer()));
+	SetDepthStencil(cmdList, {});
 
 	for (int n = 0; n < draw_data->CmdListsCount; n++)
 	{
@@ -109,7 +111,6 @@ void RenderImDrawLists(ImDrawData *draw_data) {
 
 			SetViewport(cmdList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 			SetTopology(cmdList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			SetRenderTarget(cmdList, 0, GetRTV(GetCurrentBackbuffer()));
 
 			if (pcmd->UserCallback) {
 				pcmd->UserCallback(cmd_list, pcmd);
