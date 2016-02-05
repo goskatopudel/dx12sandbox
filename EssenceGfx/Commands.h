@@ -137,6 +137,6 @@ struct GPUProfileScopeGuard {
 	}
 };
 
-#define GPU_PROFILE_SCOPE(cl, LABEL)		GPU_PROFILE_BEGIN(cl, LABEL); GPUProfileScopeGuard guard__##LABEL##__LINE__ { cl } ;
+#define GPU_PROFILE_SCOPE(cl, LABEL)		GPU_PROFILE_BEGIN(cl, LABEL); GPUProfileScopeGuard TOKENPASTE2(guard__##LABEL##,__LINE__) { cl } ;
 
 }

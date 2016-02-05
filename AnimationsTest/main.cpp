@@ -295,7 +295,7 @@ int main(int argc, char * argv[]) {
 		CreateScreenResources();
 	};
 
-	InitApplication(1200, 768, APP_FLAG_D3D12_DEBUG, APP_PRESENT_LOWLATENCY);
+	InitApplication(1200, 768, APP_FLAG_NONE, APP_PRESENT_LOWLATENCY);
 
 	return RunApplicationMainLoop();
 }

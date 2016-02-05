@@ -167,7 +167,7 @@ void ParallelUpdateAnimations(Scene& Scene, float dt) {
 		PushBack(workspace, animHandle);
 	}
 
-	auto animationsPerBatch = 128;
+	auto animationsPerBatch = 32;
 	Array<ParallelUpdateAnimationsRange_Payload> childWorkspaces(GetMallocAllocator());
 	Reserve(childWorkspaces, Size(workspace) / animationsPerBatch + 1);
 
@@ -218,6 +218,7 @@ void ParallelRenderSceneRange(const void* InArgs, Job*) {
 	auto pCamera = Args.Setup->pcamera;
 	auto drawCmds = Args.CommandList;
 	auto const& Scene = *Args.pScene;
+	GPU_PROFILE_SCOPE(drawCmds, render_scene_range);
 
 	SetRenderTarget(drawCmds, 0, GetRTV(Args.Setup->buffer));
 	SetDepthStencil(drawCmds, GetDSV(Args.Setup->depthbuffer));
