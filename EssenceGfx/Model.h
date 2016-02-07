@@ -89,8 +89,8 @@ void FreeAnimationState(animation_state_t* AnimationState);
 model_handle		GetModel(ResourceNameId);
 model_t const*		GetModelRenderData(model_handle);
 
-void calculate_animation_frames( animation_t const* Animation, animation_state_t* AnimationState, float Time, Array<xmmatrix> *outTransforms);
-void calculate_animation( animation_skeleton_t const* Skeleton, animation_t const* Animation, animation_state_t* AnimationState, float Time, Array<xmmatrix> *outNodeTransforms, Array<xmmatrix> *outTransforms);
+void calculate_animation_frames(animation_t const* Animation, animation_state_t* AnimationState, float Time, Array<xmmatrix> *outTransforms);
+void calculate_animation(animation_skeleton_t const* Skeleton, animation_t const* Animation, animation_state_t* AnimationState, float Time, Array<xmmatrix> *outNodeTransforms, Array<xmmatrix> *outTransforms);
 void calculate_animation(animation_skeleton_t const* Skeleton, animation_t const* Animation, animation_state_t* AnimationState, float Time, xmmatrix *outTransforms);
 
 }

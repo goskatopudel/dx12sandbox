@@ -48,6 +48,8 @@ void			MirrorAnimation(Scene& Scene, scene_entity_h dstEntity, scene_entity_h sr
 void			UpdateAnimations(Scene& Scene, float dt);
 void			UpdateScene(Scene &Scene, float dt);
 
+void			GetSceneAnimations(Scene* pScene, Array<animation_h>* handlesAcc);
+
 struct forward_render_scene_setup {
 	viewport_t			viewport;
 	ICameraControler*	pcamera;

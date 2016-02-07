@@ -93,6 +93,12 @@ void MirrorAnimation(Scene& Scene, scene_entity_h dstEntity, scene_entity_h srcE
 	Scene.AnimationStates[Scene.Entities[dstEntity].animation].use_counter++;
 }
 
+void GetSceneAnimations(Scene* pScene, Array<animation_h>* handlesAcc) {
+	for (auto handle : pScene->AnimationStates.Keys()) {
+		PushBack(*handlesAcc, handle);
+	}
+}
+
 void UpdateAnimations(Scene& Scene, float dt) {
 	for (auto& animState : Scene.AnimationStates) {
 		auto pRenderData = GetModelRenderData(animState.model);
@@ -286,8 +292,6 @@ void ParallelRenderSceneRoot(const void* InArgs, Job* job) {
 }
 
 void ParallelRenderScene(GPUQueue* queue, Scene &Scene, forward_render_scene_setup const* setup) {
-	Check(IsMainThread());
-
 	PROFILE_SCOPE(render_scene);
 
 	Array<scene_entity_h> workspace(GetMallocAllocator());

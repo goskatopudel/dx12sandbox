@@ -137,7 +137,7 @@ void PrintDeviceInfo(ID3D12Device* device) {
 	VerifyHr(device->CheckFeatureSupport(D3D12_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT, &addressSupport, sizeof(addressSupport)));
 
 	debugf(Format(
-		"Node count: %d\n"
+		"Node count: %u\n"
 		"Resource binding tier: %d\n"
 		"Resource heap tier: %d\n"
 		"Tiled resources tier: %d\n"
@@ -145,7 +145,8 @@ void PrintDeviceInfo(ID3D12Device* device) {
 		"Virtual address bits: %d\n"
 		"ROVs support: %d\n"
 		"Standard swizzle 64kb support: %d\n"
-		"Typed UAV load additional formats: %d\n",
+		"Typed UAV load additional formats: %d\n"
+		"VP and RT array index with no GS: %d\n",
 		device->GetNodeCount(),
 		options.ResourceBindingTier,
 		options.ResourceHeapTier,
@@ -154,7 +155,8 @@ void PrintDeviceInfo(ID3D12Device* device) {
 		options.MaxGPUVirtualAddressBitsPerResource,
 		options.ROVsSupported,
 		options.StandardSwizzle64KBSupported,
-		options.TypedUAVLoadAdditionalFormats
+		options.TypedUAVLoadAdditionalFormats,
+		options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation
 		));
 }
 

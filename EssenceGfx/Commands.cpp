@@ -18,8 +18,8 @@
 
 namespace Essence {
 
-const bool GVerbosePipelineStates = false;
-const bool GVerboseRootSingatures = false;
+const bool GVerbosePipelineStates = true;
+const bool GVerboseRootSingatures = true;
 
 commands_stats_t& operator += (commands_stats_t& lhs, commands_stats_t const& rhs) {
 	lhs.graphic_pipeline_state_changes +=	rhs.graphic_pipeline_state_changes;
@@ -523,7 +523,6 @@ public:
 	// data
 	GPUQueueTypeEnum	Type;
 	u32					AdapterIndex;
-	HANDLE				SyncEvent;
 	u64					FenceValue;
 	u64					LastSignaledValue;
 	GPUFenceHandle		LastSignaledFence;
@@ -767,7 +766,9 @@ enum CommandListStateEnum {
 };
 
 enum RootParameterEnum {
-	ROOT_TABLE
+	ROOT_TABLE,
+	ROOT_CONSTANTS,
+	ROOT_VIEW
 };
 
 struct root_table_parameter_t {
@@ -803,7 +804,8 @@ class PipelineStateBindings;
 
 struct constantbuffer_cpudata_t {
 	void*	write_ptr;
-	u32		size;
+	u32		size : 31;
+	u32		commited : 1;
 };
 
 const u32 MAX_RTVS = D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT;
@@ -852,6 +854,10 @@ public:
 	struct {
 		D3D12_COMPUTE_PIPELINE_STATE_DESC		PipelineDesc;
 	} Compute;
+	struct {
+		ID3D12DescriptorHeap*	DescriptorHeaps[2];
+		ID3D12PipelineState*	PSO;
+	} Common;
 	PipelineStateBindings*	Bindings;
 	PipelineTypeEnum		Type;
 
@@ -882,6 +888,8 @@ public:
 		Clear(Root.SrcDescRangeSizes);
 		Clear(Root.ConstantBuffers);
 		Clear(Root.Params);
+
+		Common = {};
 
 		Bindings = nullptr;
 
@@ -992,8 +1000,6 @@ GPUQueue::GPUQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex) :
 
 	SetDebugName(*D12CommandQueue, "CommandQueue");
 
-	SyncEvent = CreateEvent();
-
 	DebugName[0] = 0;
 	Verify(strncat_s(DebugName, GetString(name), _TRUNCATE) == 0);
 
@@ -1019,8 +1025,6 @@ GPUQueue::~GPUQueue() {
 
 	FreeMemory(CommandListPools);
 	FreeMemory(CommandAllocatorPools);
-
-	DestroyEvent(SyncEvent);
 }
 
 void GPUQueue::EndFrame() {
@@ -1238,6 +1242,11 @@ void Close(GPUCommandList* list) {
 
 	list->ResourcesStateTracker.FireBarriers();
 
+	for (auto kv : list->Root.ConstantBuffers) {
+		GetThreadScratchAllocator()->Free(kv.value.write_ptr);
+		kv.value.write_ptr = nullptr;
+	}
+	Clear(list->Root.ConstantBuffers);
 	ResetRootBindingMappings(list);
 	
 	VerifyHr(list->D12CommandList->Close());
@@ -1486,9 +1495,14 @@ void EndCommandsFrame(GPUQueue* mainQueue) {
 }
 
 void WaitForCompletion(GPUQueue* queue, u64 fenceValue) {
-	while (queue->D12Fence->GetCompletedValue() < fenceValue) {
-		VerifyHr(queue->D12Fence->SetEventOnCompletion(fenceValue, queue->SyncEvent));
-		WaitForSingleObject(queue->SyncEvent, 1);
+	if (queue->D12Fence->GetCompletedValue() < fenceValue) {
+		thread_local HANDLE SyncEvent = INVALID_HANDLE_VALUE;
+		if (SyncEvent == INVALID_HANDLE_VALUE) {
+			SyncEvent = CreateEvent();
+		}
+
+		VerifyHr(queue->D12Fence->SetEventOnCompletion(fenceValue, SyncEvent));
+		WaitForSingleObject(SyncEvent, 1);
 	}
 }
 
@@ -1741,9 +1755,23 @@ root_signature_t GetRootSignature(D3D12_ROOT_SIGNATURE_DESC const& desc,
 	Array<D3D12_ROOT_PARAMETER> const* params
 	) {
 	Array<D3D12_STATIC_SAMPLER_DESC> samplers(GetThreadScratchAllocator());
-	//D3D12_STATIC_SAMPLER_DESC sampler = {};
-	//sampler.Filter = 
-
+	/*D3D12_STATIC_SAMPLER_DESC sampler;
+	sampler.ShaderRegister = 0;
+	sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	sampler.MipLODBias = 0;
+	sampler.MaxAnisotropy = 16;
+	sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+	sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+	sampler.MinLOD = 0.f;
+	sampler.MaxLOD = D3D12_FLOAT32_MAX;
+	sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	sampler.RegisterSpace = 0;
+	PushBack(samplers, sampler);
+	desc.pStaticSamplers = samplers.DataPtr;
+	desc.NumStaticSamplers = (u32)Size(samplers);*/
 
 	// hash only content, not pointers!
 	u64 rootHash = 0;
@@ -1818,12 +1846,16 @@ struct shader_input_desc_t {
 	}
 };
 
-struct shader_constantbuffer_desc_t {
+// shader indepedant information about constant buffer
+// based on size & variables
+struct constantbuffer_meta_t {
 	u32	bytesize;
 	u64 content_hash;
 };
 
-struct shader_constantvariable_desc_t {
+// shader indepedant information about constant variable
+// based on size & name, mapped to specific constantbuffer
+struct constantvariable_meta_t {
 	u32		constantbuffer_offset;
 	u32		bytesize;
 	TextId	constantbuffer_name;
@@ -1831,9 +1863,9 @@ struct shader_constantvariable_desc_t {
 };
 
 bool GetConstantBuffersAndVariables(
-	ID3D12ShaderReflection* shaderReflection,
-	Hashmap<TextId, shader_constantbuffer_desc_t>	&cbDict,
-	Hashmap<TextId, shader_constantvariable_desc_t>			&varsDict) {
+	ID3D12ShaderReflection*							shaderReflection,
+	Hashmap<TextId, constantbuffer_meta_t>	&cbDict,
+	Hashmap<TextId, constantvariable_meta_t>	&varsDict) {
 
 	D3D12_SHADER_DESC shaderDesc;
 	VerifyHr(shaderReflection->GetDesc(&shaderDesc));
@@ -1846,13 +1878,11 @@ bool GetConstantBuffersAndVariables(
 
 		// preparing hash of constant buffer with all variables inside, so we can figure out collisions!
 		auto cbDictKey = TEXT_(bufferDesc.Name);
-		shader_constantbuffer_desc_t cbInfo;
+		constantbuffer_meta_t cbInfo;
 		cbInfo.content_hash = Hash::MurmurHash2_64(bufferDesc.Name, (u32)strlen(bufferDesc.Name), 0);
 		bufferDesc.Name = nullptr;
 		cbInfo.content_hash = Hash::MurmurHash2_64(&bufferDesc, (u32)sizeof(bufferDesc), cbInfo.content_hash);
 		cbInfo.bytesize = bufferDesc.Size;
-
-		//auto defaultContent = GetThreadScratchAllocator()->Allocate(cbInfo.bytesize, 8);
 
 		if (bufferDesc.Type == D3D_CT_CBUFFER) {
 			auto variablesNum = bufferDesc.Variables;
@@ -1886,7 +1916,7 @@ bool GetConstantBuffersAndVariables(
 
 				auto varDictKey = TEXT_(variableDesc.Name);
 
-				shader_constantvariable_desc_t varInfo;
+				constantvariable_meta_t varInfo;
 				varInfo.constantbuffer_offset = variableDesc.StartOffset;
 				varInfo.bytesize = variableDesc.Size;
 				varInfo.constantbuffer_name = cbDictKey;
@@ -1932,6 +1962,9 @@ bool GetInputBindingSlots(
 		ZeroMemory(
 			(u8*)&bindDesc + offsetof(D3D12_SHADER_INPUT_BIND_DESC, uID) + sizeof(bindDesc.uID),
 			sizeof(bindDesc) - offsetof(D3D12_SHADER_INPUT_BIND_DESC, uID) - sizeof(bindDesc.uID));
+
+		// no idea why this bit is set for texture
+		bool isUsed = !!(bindDesc.uFlags & D3D_SVF_INTERFACE_POINTER);
 
 		shader_input_desc_t bindInfo = {};
 		bindInfo.reg = bindDesc.BindPoint;
@@ -1990,11 +2023,14 @@ bool GetInputBindingSlots(
 
 typedef GenericHandle32<20, TYPE_ID(PipelineState)> pipeline_handle;
 
+// maps view to rootparam for specific signature
+// if view is tabl we specify slot, if not slot can be ignored
 struct shader_binding_t {
 	u32 table_slot;
 	u64 root_parameter_hash;
 };
 
+// maps variable to rootparam for specific signature
 struct shader_constantvariable_t {
 	u32 bytesize;
 	u32 byteoffset;
@@ -2010,6 +2046,7 @@ struct compute_pipeline_root_key {
 	shader_handle CS;
 };
 
+// helper structure
 struct root_range_offset_t {
 	u32 index;
 	u32 num;
@@ -2037,7 +2074,7 @@ void GetRootParamsForBindings(
 	//right now everything ends in a table
 	D3D12_ROOT_PARAMETER currentTable;
 	currentTable.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-	currentTable.ShaderVisibility = bindInputs.Values[index].visibility;
+	currentTable.ShaderVisibility = bindInputs[bindKeys[index]].visibility;
 
 	// create ranges, figure out slots for bindings
 	for (; index < end; ++index) {
@@ -2140,12 +2177,24 @@ Array<K> GetKeysScratch(Hashmap<K, V>  & Hm) {
 }
 
 void DebugPrintRoot(D3D12_ROOT_SIGNATURE_DESC const& desc) {
+	u32 rootSize = 0;
 	ConsolePrint("Root params:\n");
 	for (auto i : MakeRange(desc.NumParameters)) {
-		desc.pParameters[i].DescriptorTable;
-		desc.pParameters[i].ShaderVisibility;
-
-		Check(desc.pParameters[i].ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE);
+		switch (desc.pParameters[i].ParameterType) {
+		case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
+			rootSize += 1;
+			break;
+		case D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS:
+			rootSize += desc.pParameters[i].Constants.Num32BitValues;
+			break;
+		case D3D12_ROOT_PARAMETER_TYPE_CBV:
+		case D3D12_ROOT_PARAMETER_TYPE_SRV:
+		case D3D12_ROOT_PARAMETER_TYPE_UAV:
+			rootSize += 2;
+			break;
+		default:
+			Check(0);
+		}
 
 		auto visibilityStr = [](D3D12_SHADER_VISIBILITY a) {
 			switch (a) {
@@ -2173,19 +2222,28 @@ void DebugPrintRoot(D3D12_ROOT_SIGNATURE_DESC const& desc) {
 			return "?";
 		};
 
-		ConsolePrint(Format("[%d]: table, visibility: %s\n", i, visibilityStr(desc.pParameters[i].ShaderVisibility)));
+		if (desc.pParameters[i].ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE) {
+			ConsolePrint(Format("[%d]: table, visibility: %s\n", i, visibilityStr(desc.pParameters[i].ShaderVisibility)));
 
-		for (auto r : MakeRange(desc.pParameters[i].DescriptorTable.NumDescriptorRanges)) {
-			auto range = desc.pParameters[i].DescriptorTable.pDescriptorRanges[r];
-			ConsolePrint(Format("  [%d]: %s%d,%d+%d offset %d\n", 
-				r,
-				rangeStr(range.RangeType),
-				range.BaseShaderRegister,
-				range.RegisterSpace,
-				range.NumDescriptors,
-				range.OffsetInDescriptorsFromTableStart));
+			for (auto r : MakeRange(desc.pParameters[i].DescriptorTable.NumDescriptorRanges)) {
+				auto range = desc.pParameters[i].DescriptorTable.pDescriptorRanges[r];
+				ConsolePrint(Format("  [%d]: %s%d,%d+%d offset %d\n",
+					r,
+					rangeStr(range.RangeType),
+					range.BaseShaderRegister,
+					range.RegisterSpace,
+					range.NumDescriptors,
+					range.OffsetInDescriptorsFromTableStart));
+			}
+		}
+		else if (desc.pParameters[i].ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS) {
+			ConsolePrint("?\n");
+		}
+		else {
+			ConsolePrint("?\n");
 		}
 	}
+	ConsolePrint(Format("%u / 64 DWORDS\n", rootSize));
 }
 
 class PipelineStateBindings {
@@ -2194,16 +2252,16 @@ public:
 	Hashmap<TextId, shader_binding_t>				Texture2DParams;
 	Hashmap<TextId, shader_binding_t>				RWTexture2DParams;
 	Hashmap<TextId, shader_constantvariable_t>		ConstantVarParams;
-	Hashmap<u64, shader_constantbuffer_t>			ConstantBuffers;
-	Hashmap<u64, root_parameter_t>					RootParams;
+	Hashmap<u64,	shader_constantbuffer_t>		ConstantBuffers;
+	Hashmap<u64,	root_parameter_t>				RootParams;
 
 	ID3D12RootSignature* RootSignature;
 
 protected:
 	void PrepareInternal(
-		Hashmap<TextId, shader_constantvariable_desc_t>& constantVariables,
+		Hashmap<TextId, constantvariable_meta_t>& constantVariables,
 		Hashmap<TextId, shader_input_desc_t>& bindInputs,
-		Hashmap<TextId, shader_constantbuffer_desc_t>& constantBuffers) 
+		Hashmap<TextId, constantbuffer_meta_t>& constantBuffers) 
 	{
 		auto bindKeys = GetKeysScratch(bindInputs);
 		quicksort(bindKeys.DataPtr, 0, bindKeys.Size, [&](TextId a, TextId b) -> bool { return bindInputs[a] < bindInputs[b]; });
@@ -2329,9 +2387,9 @@ public:
 			return;
 		}
 
-		Hashmap<TextId, shader_constantvariable_desc_t>	constantVariables(GetThreadScratchAllocator());
+		Hashmap<TextId, constantvariable_meta_t>	constantVariables(GetThreadScratchAllocator());
 		Hashmap<TextId, shader_input_desc_t>			bindInputs(GetThreadScratchAllocator());
-		Hashmap<TextId, shader_constantbuffer_desc_t>	constantBuffers(GetThreadScratchAllocator());
+		Hashmap<TextId, constantbuffer_meta_t>	constantBuffers(GetThreadScratchAllocator());
 
 		ID3D12ShaderReflection* vsReflection;
 		VerifyHr(D3DReflect(vsBytecode.bytecode, vsBytecode.bytesize, IID_PPV_ARGS(&vsReflection)));
@@ -2384,9 +2442,9 @@ public:
 			return;
 		}
 
-		Hashmap<TextId, shader_constantvariable_desc_t>	constantVariables(GetThreadScratchAllocator());
+		Hashmap<TextId, constantvariable_meta_t>	constantVariables(GetThreadScratchAllocator());
 		Hashmap<TextId, shader_input_desc_t>			bindInputs(GetThreadScratchAllocator());
-		Hashmap<TextId, shader_constantbuffer_desc_t>	constantBuffers(GetThreadScratchAllocator());
+		Hashmap<TextId, constantbuffer_meta_t>	constantBuffers(GetThreadScratchAllocator());
 
 		ID3D12ShaderReflection* csReflection;
 		VerifyHr(D3DReflect(csBytecode.bytecode, csBytecode.bytesize, IID_PPV_ARGS(&csReflection)));
@@ -2459,6 +2517,19 @@ ComputePipelineStateBindings* GetComputePipelineStateBindings(shader_handle CS) 
 	return val;
 }
 
+void SetDescriptorHeaps(GPUCommandList* list, ID3D12DescriptorHeap* viewsHeap, ID3D12DescriptorHeap* samplersHeap) {
+	Check(viewsHeap);
+
+	if (list->Common.DescriptorHeaps[0] == viewsHeap && list->Common.DescriptorHeaps[1] == samplersHeap) {
+		return;
+	}
+
+	list->Common.DescriptorHeaps[0] = viewsHeap;
+	list->Common.DescriptorHeaps[1] = samplersHeap;
+
+	list->D12CommandList->SetDescriptorHeaps(samplersHeap ? 2 : 1, list->Common.DescriptorHeaps);
+}
+
 void SetRootParams(GPUCommandList* list) {
 	if (Size(list->Root.DstDescRanges) && Size(list->Root.SrcDescRanges)) {
 		GD12Device->CopyDescriptors(
@@ -2470,24 +2541,27 @@ void SetRootParams(GPUCommandList* list) {
 	}
 
 	for (auto kv : list->Root.ConstantBuffers) {
-		auto const& cb = list->Bindings->ConstantBuffers[kv.key];
 		auto const& cbData = kv.value;
-		auto allocation = ConstantsAllocator.AllocateTemporary(list->Bindings->ConstantBuffers[kv.key].bytesize);
+		if (cbData.commited == 0) {
+			auto const& cb = list->Bindings->ConstantBuffers[kv.key];
+			auto allocation = ConstantsAllocator.AllocateTemporary(list->Bindings->ConstantBuffers[kv.key].bytesize);
 
-		Check(Contains(list->Root.Params, cb.param_hash));
+			Check(Contains(list->Root.Params, cb.param_hash));
 
-		D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
-		cbvDesc.BufferLocation = allocation.virtual_address;
-		cbvDesc.SizeInBytes = (cb.bytesize | 0xFF) + 1;
-		GD12Device->CreateConstantBufferView(&cbvDesc, offseted_handle(list->Root.Params[cb.param_hash].binding.table.cpu_handle, cb.table_slot, GD12CbvSrvUavDescIncrement));
+			D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
+			cbvDesc.BufferLocation = allocation.virtual_address;
+			cbvDesc.SizeInBytes = (cb.bytesize | 0xFF) + 1;
+			GD12Device->CreateConstantBufferView(&cbvDesc, offseted_handle(list->Root.Params[cb.param_hash].binding.table.cpu_handle, cb.table_slot, GD12CbvSrvUavDescIncrement));
 
-		memcpy(allocation.write_ptr, kv.value.write_ptr, cb.bytesize);
+			memcpy(allocation.write_ptr, kv.value.write_ptr, cb.bytesize);
 #if COLLECT_RENDER_STATS
-		list->Stats.constants_bytes_uploaded+=cb.bytesize;
+			list->Stats.constants_bytes_uploaded += cb.bytesize;
 #endif
+		}
 	}
 
-	list->D12CommandList->SetDescriptorHeaps(1, &GpuDescriptorsAllocator.D12DescriptorHeap.Ptr);
+	SetDescriptorHeaps(list, GpuDescriptorsAllocator.D12DescriptorHeap.Ptr, nullptr);
+
 	if (list->Type == PIPELINE_GRAPHICS) {
 		for (auto kv : list->Root.Params) {
 			list->D12CommandList->SetGraphicsRootDescriptorTable(kv.value.table.root_index, kv.value.binding.table.gpu_handle);
@@ -2501,11 +2575,6 @@ void SetRootParams(GPUCommandList* list) {
 }
 
 void ResetRootBindingMappings(GPUCommandList* list) {
-	for (auto kv : list->Root.ConstantBuffers) {
-		GetThreadScratchAllocator()->Free(kv.value.write_ptr);
-		kv.value.write_ptr = nullptr;
-	}
-	Clear(list->Root.ConstantBuffers);
 	Clear(list->Root.DstDescRanges);
 	Clear(list->Root.DstDescSizes);
 	Clear(list->Root.SrcDescRanges);
@@ -2516,10 +2585,12 @@ void ResetRootBindingMappings(GPUCommandList* list) {
 void SetComputeShaderState(GPUCommandList* list, shader_handle cs) {
 	auto bindings = GetComputePipelineStateBindings(cs);
 
-	ResetRootBindingMappings(list);
+	//if (bindings != list->Bindings) {
+		ResetRootBindingMappings(list);
 
-	list->Bindings = bindings;
-	list->Type = PIPELINE_COMPUTE;
+		list->Bindings = bindings;
+		list->Type = PIPELINE_COMPUTE;
+	//}
 }
 
 void SetShaderState(GPUCommandList* list, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory) {
@@ -2527,10 +2598,12 @@ void SetShaderState(GPUCommandList* list, shader_handle vs, shader_handle ps, ve
 
 	list->Graphics.VertexFactory = vertexFactory;
 
-	ResetRootBindingMappings(list);
+	//if (bindings != list->Bindings) {
+		ResetRootBindingMappings(list);
 
-	list->Bindings = bindings;
-	list->Type = PIPELINE_GRAPHICS;
+		list->Bindings = bindings;
+		list->Type = PIPELINE_GRAPHICS;
+	//}
 }
 
 void SetTopology(GPUCommandList* list, D3D_PRIMITIVE_TOPOLOGY topology) {
@@ -2778,10 +2851,13 @@ void PreDraw(GPUCommandList* list) {
 	list->Stats.graphic_root_signature_changes++;
 #endif
 	SetRootParams(list);
-	d12cl->SetPipelineState(pipelineState);
+	if (list->Common.PSO != pipelineState) {
+		d12cl->SetPipelineState(pipelineState);
+		list->Common.PSO = pipelineState;
 #if COLLECT_RENDER_STATS
-	list->Stats.graphic_pipeline_state_changes++;
+		list->Stats.graphic_pipeline_state_changes++;
 #endif
+	}
 	d12cl->IASetPrimitiveTopology(list->Graphics.Topology);
 	d12cl->IASetVertexBuffers(0, list->Graphics.VertexStreamsNum, list->Graphics.VertexStreams);
 
@@ -2803,11 +2879,8 @@ void PreDraw(GPUCommandList* list) {
 
 void PostDraw(GPUCommandList* list) {
 	for (auto kv : list->Root.ConstantBuffers) {
-		GetThreadScratchAllocator()->Free(kv.value.write_ptr);
-		kv.value.write_ptr = nullptr;
-		Remove(list->Root.Params, kv.key);
+		kv.value.commited = 1;
 	}
-	Clear(list->Root.ConstantBuffers);
 }
 
 void Draw(GPUCommandList* list, u32 vertexCount, u32 startVertex, u32 instances, u32 startInstance)  {
@@ -2846,10 +2919,13 @@ void PreDispatch(GPUCommandList* list) {
 	list->Stats.compute_root_signature_changes++;
 #endif
 	SetRootParams(list);
-	d12cl->SetPipelineState(pipelineState);
+	if (list->Common.PSO != pipelineState) {
+		d12cl->SetPipelineState(pipelineState);
+		list->Common.PSO = pipelineState;
 #if COLLECT_RENDER_STATS
-	list->Stats.compute_pipeline_state_changes++;
+		list->Stats.compute_pipeline_state_changes++;
 #endif
+	}
 
 	list->ResourcesStateTracker.FireBarriers();
 }
@@ -2954,14 +3030,20 @@ void*	GetConstantWritePtr(GPUCommandList* list, TextId var, size_t writeSize) {
 	Check(Contains(list->Bindings->ConstantBuffers, constantVar.cb_hash_index));
 	auto rootParamPtr = PrepareRootParam(list, list->Bindings->ConstantBuffers[constantVar.cb_hash_index].param_hash);
 
-	if (!Get(list->Root.ConstantBuffers, constantVar.cb_hash_index)) {
+	auto pCB = Get(list->Root.ConstantBuffers, constantVar.cb_hash_index);
+	if (!pCB) {
 		auto const& cbInfo = list->Bindings->ConstantBuffers[constantVar.cb_hash_index];
 
 		constantbuffer_cpudata_t cbData;
 		cbData.write_ptr = GetThreadScratchAllocator()->Allocate(cbInfo.bytesize, 16);
 		cbData.size = cbInfo.bytesize;
+		cbData.commited = 0;
 
 		list->Root.ConstantBuffers[constantVar.cb_hash_index] = cbData;
+	}
+	// we need to create new view
+	else if (pCB->commited) {
+		pCB->commited = 0;
 	}
 
 	Check(constantVar.bytesize <= list->Bindings->ConstantBuffers[constantVar.cb_hash_index].bytesize);
@@ -2970,6 +3052,8 @@ void*	GetConstantWritePtr(GPUCommandList* list, TextId var, size_t writeSize) {
 	return pointer_add(list->Root.ConstantBuffers[constantVar.cb_hash_index].write_ptr, constantVar.byteoffset);
 }
 
+// no checking if data is same, if we overwrite already commited buffer it will be mirrored
+// app code is responsible to avoid commiting same data (only set changed constants!)
 void SetConstant(GPUCommandList* list, TextId var, const void* srcPtr, size_t srcSize) {
 	auto upload = GetConstantWritePtr(list, var, srcSize);
 	if (upload) {

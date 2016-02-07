@@ -38,7 +38,6 @@ void CreateScreenResources() {
 
 struct render_data_t {
 	float3			position;
-	float4			qrotation;
 	float3			scale;
 	model_handle	model;
 };
@@ -49,15 +48,80 @@ model_handle icosahedronmodel;
 model_handle torusmodel;
 model_handle tubemodel;
 
+Array<render_data_t> RenderObjects;
+random_generator RNG;
+float ObjectsToRender = 100;
+float Alpha = 1;
+const u32 MaxObjects = 100000;
+
+float3 UniformSpherePoint(float radius) {
+	while (true) {
+		auto p = float3(RNG.f32Next() * radius * 2.f - radius, RNG.f32Next() * radius * 2.f - radius, RNG.f32Next() * radius * 2.f - radius);
+		float d = sqrtf(p.x * p.x + p.y * p.y + p.z * p.z);
+		if (d < radius) {
+			return p;
+		}
+	}
+}
+
 void Init() {
 	CreateScreenResources();
-	FpsCamera.setup(float3(0, 0, -50), float3(0, 0, 1));
+	FpsCamera.setup(float3(0, 0, -250.f), float3(0, 0, 1));
 
 	cubemodel			= GetModel(NAME_("Models/cube.obj"));
 	cylindermodel		= GetModel(NAME_("Models/cylinder.fbx"));
 	icosahedronmodel	= GetModel(NAME_("Models/icosa.hedron.fbx"));
 	torusmodel			= GetModel(NAME_("Models/torus.fbx"));
 	tubemodel			= GetModel(NAME_("Models/tube.fbx"));
+
+	model_handle models[] = {
+		cubemodel, cylindermodel, icosahedronmodel, torusmodel, tubemodel
+	};
+
+	float sphereRadius = 50.f;
+
+	Resize(RenderObjects, MaxObjects);
+	for (u32 i = 0; i < MaxObjects; ++i) {
+		RenderObjects[i].position = UniformSpherePoint(sphereRadius);
+		RenderObjects[i].scale = float3(1, 1, 1);
+		RenderObjects[i].model = models[RNG.u32Next() % _countof(models)];
+	}
+}
+
+
+void ShowStatsWindow() {
+	ImGui::Begin("Stats");
+
+	auto stats = GetLastFrameStats();
+
+	ImGui::BulletText("Command lists");
+	ImGui::Indent();
+	ImGui::Text("All / Patchup / Executions: %u / %u / %u", stats->command_lists_num, stats->patchup_command_lists_num, stats->executions_num);
+	ImGui::Unindent();
+
+	ImGui::Separator();
+
+	ImGui::BulletText("Commands");
+	ImGui::Indent();
+	ImGui::Text("Graphics");
+	ImGui::Text("PSO changes:\nRootSignature changes:\nDrawcalls:"); ImGui::SameLine();
+	ImGui::Text("%u\n%u\n%u",
+		stats->command_stats.graphic_pipeline_state_changes,
+		stats->command_stats.graphic_root_signature_changes,
+		stats->command_stats.draw_calls);
+
+	ImGui::Text("Compute");
+	ImGui::Text("PSO changes:\nRootSignature changes:\nDispatches:"); ImGui::SameLine();
+	ImGui::Text("%u\n%u\n%u",
+		stats->command_stats.compute_pipeline_state_changes,
+		stats->command_stats.compute_root_signature_changes,
+		stats->command_stats.dispatches);
+
+	ImGui::Text("Common");
+	ImGui::Text("Constants: %llu Kb", Kilobytes(stats->command_stats.constants_bytes_uploaded));
+	ImGui::Unindent();
+
+	ImGui::End();
 }
 
 void Tick(float fDeltaTime) {
@@ -128,6 +192,7 @@ void Tick(float fDeltaTime) {
 	ImGui::ShowTestWindow();
 
 	ShowMemoryInfo();
+	ShowStatsWindow();
 
 	PROFILE_END; // ui logic
 
@@ -135,55 +200,59 @@ void Tick(float fDeltaTime) {
 	ClearRenderTarget(drawList, GetRTV(RT_A), float4(0.5f, 0.5f, 0.5f, 1));
 	ClearDepthStencil(drawList, GetDSV(DepthBuffer));
 
-	float3 scale = float3(10, 10, 10);
-	float4 qrotation = float4(0, 0, 0, 1);
-	float3 position = float3(0, 0, 0);
-
-	auto worldMatrix = XMMatrixTranspose(
-		XMMatrixAffineTransformation(
-			XMLoadFloat3((XMFLOAT3*)&scale),
-			XMVectorZero(),
-			XMLoadFloat4((XMFLOAT4*)&qrotation),
-			XMLoadFloat3((XMFLOAT3*)&position)
-			));
+	float ObjectsDelta = ((1000.f / 60.f - fDeltaTime * 1000.f) * Alpha);
+	ObjectsToRender = min(max(ObjectsToRender + ObjectsDelta, 10.f), (float)MaxObjects);
 
 	auto viewProjMatrix = XMMatrixTranspose(
 		CameraControlerPtr->GetViewMatrix()
 		* XMMatrixPerspectiveFovLH(3.14f * 0.25f, (float)GDisplaySettings.resolution.x / (float)GDisplaySettings.resolution.y, 0.01f, 1000.f));
 
-	auto renderData = GetModelRenderData(icosahedronmodel);
+	u32 N = (u32)ObjectsToRender;
+	for (u32 o = 0; o < N; ++o) {
+		float3 scale =		RenderObjects[o].scale;
+		float4 qrotation =	float4(0, 0, 0, 1);
+		float3 position = RenderObjects[o].position;
 
-	for (auto i : MakeRange(renderData->submeshes.num)) {
-		SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
-		SetRenderTarget(drawList, 0, GetRTV(RT_A));
-		SetDepthStencil(drawList, GetDSV(DepthBuffer));
-		SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
-		SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		auto worldMatrix = XMMatrixTranspose(
+			XMMatrixAffineTransformation(
+				XMLoadFloat3((XMFLOAT3*)&scale),
+				XMVectorZero(),
+				XMLoadFloat4((XMFLOAT4*)&qrotation),
+				XMLoadFloat3((XMFLOAT3*)&position)
+				));
 
-		SetConstant(drawList, TEXT_("World"), worldMatrix);
-		SetConstant(drawList, TEXT_("ViewProj"), viewProjMatrix);
+		auto renderData = GetModelRenderData(RenderObjects[o].model);
 
-		buffer_location_t vb;
-		vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
-		vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
-		vb.stride = sizeof(mesh_vertex_t);
+		for (auto i : MakeRange(renderData->submeshes.num)) {
+			SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
+			SetRenderTarget(drawList, 0, GetRTV(RT_A));
+			SetDepthStencil(drawList, GetDSV(DepthBuffer));
+			SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
+			SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		SetVertexStream(drawList, 0, vb);
+			SetConstant(drawList, TEXT_("World"), worldMatrix);
+			SetConstant(drawList, TEXT_("ViewProj"), viewProjMatrix);
 
-		buffer_location_t ib;
-		ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
-		ib.size = renderData->indices_num * sizeof(u32);
-		ib.stride = sizeof(u32);
+			buffer_location_t vb;
+			vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
+			vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
+			vb.stride = sizeof(mesh_vertex_t);
 
-		SetIndexBuffer(drawList, ib);
+			SetVertexStream(drawList, 0, vb);
 
-		auto submesh = renderData->submeshes[i];
-		DrawIndexed(drawList, submesh.index_count, submesh.start_index, submesh.base_vertex);
+			buffer_location_t ib;
+			ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
+			ib.size = renderData->indices_num * sizeof(u32);
+			ib.stride = sizeof(u32);
+
+			SetIndexBuffer(drawList, ib);
+
+			auto submesh = renderData->submeshes[i];
+			DrawIndexed(drawList, submesh.index_count, submesh.start_index, submesh.base_vertex);
+		}
 	}
 
 	CopyResource(drawList, GetCurrentBackbuffer(), RT_A);
-	/*Execute(drawList);
-	drawList = GetCommandList(GGPUMainQueue, NAME_("RenderWork"));*/
 	
 	RenderUserInterface(drawList);
 	Execute(drawList);
@@ -193,6 +262,7 @@ void Tick(float fDeltaTime) {
 
 void Shutdown() {
 	WaitForCompletion();
+	FreeMemory(RenderObjects);
 }
 
 int main(int argc, char * argv[]) {
@@ -206,7 +276,7 @@ int main(int argc, char * argv[]) {
 		CreateScreenResources();
 	};
 
-	InitApplication(1200, 768, APP_FLAG_D3D12_DEBUG, APP_PRESENT_LOWLATENCY);
+	InitApplication(1200, 768, APP_FLAG_D3D12_DEBUG, APP_PRESENT_UNTHROTTLED);
 
 	return RunApplicationMainLoop();
 }

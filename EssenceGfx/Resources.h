@@ -87,8 +87,8 @@ struct subresource_read_info_t {
 };
 
 resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
-resource_handle			CreateBuffer(ResourceHeapType heapType, u64 size, BufferFlags flags, const char* debugName);
-void					CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size);
+resource_handle	CreateBuffer(ResourceHeapType heapType, u64 size, BufferFlags flags, const char* debugName);
+void			CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size);
 void			CopyFromCpuToSubresources(class GPUQueue* queue, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData);
 resource_handle CreateReadbackBufferForResource(resource_handle targetedResource);
 void			CopyToReadbackBuffer(GPUCommandList* list, resource_handle dst, resource_handle src);
