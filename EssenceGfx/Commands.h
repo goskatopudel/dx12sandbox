@@ -105,9 +105,11 @@ void						UpdatePipelineStates();
 struct commands_stats_t {
 	u32 graphic_pipeline_state_changes;
 	u32 graphic_root_signature_changes;
+	u32 graphic_root_params_set;
 	u32 draw_calls;
 	u32 compute_pipeline_state_changes;
 	u32 compute_root_signature_changes;
+	u32 compute_root_params_set;
 	u32 dispatches;
 	u64 constants_bytes_uploaded;
 };

@@ -131,17 +131,6 @@ void DescriptorAllocator::Free(descriptor_allocation_t allocation) {
 	PushBack(FreeRanges[bucket], range);
 }
 
-void cpu_pause_8() {
-	_mm_pause();
-	_mm_pause();
-	_mm_pause();
-	_mm_pause();
-	_mm_pause();
-	_mm_pause();
-	_mm_pause();
-	_mm_pause();
-}
-
 descriptor_allocation_t DescriptorAllocator::AllocateTemporary(u32 num) {
 	if (!Size(TemporaryBlocks)) {
 		ScopeLock lock(&TemporaryBlocksCS);

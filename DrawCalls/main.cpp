@@ -104,17 +104,19 @@ void ShowStatsWindow() {
 	ImGui::BulletText("Commands");
 	ImGui::Indent();
 	ImGui::Text("Graphics");
-	ImGui::Text("PSO changes:\nRootSignature changes:\nDrawcalls:"); ImGui::SameLine();
-	ImGui::Text("%u\n%u\n%u",
+	ImGui::Text("PSO changes:\nRootSignature changes:\nRoot params set:\nDrawcalls:"); ImGui::SameLine();
+	ImGui::Text("%u\n%u\n%u\n%u",
 		stats->command_stats.graphic_pipeline_state_changes,
 		stats->command_stats.graphic_root_signature_changes,
+		stats->command_stats.graphic_root_params_set,
 		stats->command_stats.draw_calls);
 
 	ImGui::Text("Compute");
-	ImGui::Text("PSO changes:\nRootSignature changes:\nDispatches:"); ImGui::SameLine();
-	ImGui::Text("%u\n%u\n%u",
+	ImGui::Text("PSO changes:\nRootSignature changes:\nRoot params set:\nDispatches:"); ImGui::SameLine();
+	ImGui::Text("%u\n%u\n%u\n%u",
 		stats->command_stats.compute_pipeline_state_changes,
 		stats->command_stats.compute_root_signature_changes,
+		stats->command_stats.compute_root_params_set,
 		stats->command_stats.dispatches);
 
 	ImGui::Text("Common");
@@ -207,10 +209,15 @@ void Tick(float fDeltaTime) {
 		CameraControlerPtr->GetViewMatrix()
 		* XMMatrixPerspectiveFovLH(3.14f * 0.25f, (float)GDisplaySettings.resolution.x / (float)GDisplaySettings.resolution.y, 0.01f, 1000.f));
 
+	SetRenderTarget(drawList, 0, GetRTV(RT_A));
+	SetDepthStencil(drawList, GetDSV(DepthBuffer));
+	SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
+	SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
 	u32 N = (u32)ObjectsToRender;
 	for (u32 o = 0; o < N; ++o) {
-		float3 scale =		RenderObjects[o].scale;
-		float4 qrotation =	float4(0, 0, 0, 1);
+		float3 scale = RenderObjects[o].scale;
+		float4 qrotation = float4(0, 0, 0, 1);
 		float3 position = RenderObjects[o].position;
 
 		auto worldMatrix = XMMatrixTranspose(
@@ -223,30 +230,28 @@ void Tick(float fDeltaTime) {
 
 		auto renderData = GetModelRenderData(RenderObjects[o].model);
 
-		for (auto i : MakeRange(renderData->submeshes.num)) {
-			SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
-			SetRenderTarget(drawList, 0, GetRTV(RT_A));
-			SetDepthStencil(drawList, GetDSV(DepthBuffer));
-			SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
-			SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
 
-			SetConstant(drawList, TEXT_("World"), worldMatrix);
+		if (o == 0) 
+		{
 			SetConstant(drawList, TEXT_("ViewProj"), viewProjMatrix);
+		}
 
-			buffer_location_t vb;
-			vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
-			vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
-			vb.stride = sizeof(mesh_vertex_t);
+		buffer_location_t vb;
+		vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
+		vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
+		vb.stride = sizeof(mesh_vertex_t);
+		SetVertexStream(drawList, 0, vb);
 
-			SetVertexStream(drawList, 0, vb);
+		buffer_location_t ib;
+		ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
+		ib.size = renderData->indices_num * sizeof(u32);
+		ib.stride = sizeof(u32);
+		SetIndexBuffer(drawList, ib);
 
-			buffer_location_t ib;
-			ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
-			ib.size = renderData->indices_num * sizeof(u32);
-			ib.stride = sizeof(u32);
+		SetConstant(drawList, TEXT_("World"), worldMatrix);
 
-			SetIndexBuffer(drawList, ib);
-
+		for (auto i : MakeRange(renderData->submeshes.num)) {
 			auto submesh = renderData->submeshes[i];
 			DrawIndexed(drawList, submesh.index_count, submesh.start_index, submesh.base_vertex);
 		}

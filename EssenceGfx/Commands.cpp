@@ -22,13 +22,15 @@ const bool GVerbosePipelineStates = true;
 const bool GVerboseRootSingatures = true;
 
 commands_stats_t& operator += (commands_stats_t& lhs, commands_stats_t const& rhs) {
-	lhs.graphic_pipeline_state_changes +=	rhs.graphic_pipeline_state_changes;
-	lhs.graphic_root_signature_changes +=	rhs.graphic_root_signature_changes;
-	lhs.draw_calls +=						rhs.draw_calls;
-	lhs.compute_pipeline_state_changes +=	rhs.compute_pipeline_state_changes;
-	lhs.compute_root_signature_changes +=	rhs.compute_root_signature_changes;
-	lhs.dispatches +=						rhs.dispatches;
-	lhs.constants_bytes_uploaded +=			rhs.constants_bytes_uploaded;
+	lhs.graphic_pipeline_state_changes += rhs.graphic_pipeline_state_changes;
+	lhs.graphic_root_signature_changes += rhs.graphic_root_signature_changes;
+	lhs.graphic_root_params_set += rhs.graphic_root_params_set;
+	lhs.draw_calls += rhs.draw_calls;
+	lhs.compute_pipeline_state_changes += rhs.compute_pipeline_state_changes;
+	lhs.compute_root_signature_changes += rhs.compute_root_signature_changes;
+	lhs.compute_root_params_set += rhs.compute_root_params_set;
+	lhs.dispatches += rhs.dispatches;
+	lhs.constants_bytes_uploaded += rhs.constants_bytes_uploaded;
 	return lhs;
 }
 
@@ -85,24 +87,24 @@ void GetD3D12StateDefaults(D3D12_RASTERIZER_DESC *pDest) {
 }
 
 bool IsDepthReadOnly(D3D12_GRAPHICS_PIPELINE_STATE_DESC const* desc) {
-	return 
+	return
 		desc->DepthStencilState.DepthEnable == false ||
 		desc->DepthStencilState.DepthFunc == D3D12_COMPARISON_FUNC_NEVER ||
 		desc->DepthStencilState.DepthWriteMask == 0;
 }
 
 bool IsStencilReadOnly(D3D12_GRAPHICS_PIPELINE_STATE_DESC const* desc) {
-	return 
+	return
 		desc->DepthStencilState.StencilEnable == false ||
 		desc->DepthStencilState.StencilWriteMask == 0 ||
 		(desc->DepthStencilState.FrontFace.StencilFunc == D3D12_COMPARISON_FUNC_NEVER ||
 			(desc->DepthStencilState.FrontFace.StencilDepthFailOp == D3D12_STENCIL_OP_KEEP
-			&& desc->DepthStencilState.FrontFace.StencilFailOp == D3D12_STENCIL_OP_KEEP
-			&& desc->DepthStencilState.FrontFace.StencilPassOp == D3D12_STENCIL_OP_KEEP)) ||
+				&& desc->DepthStencilState.FrontFace.StencilFailOp == D3D12_STENCIL_OP_KEEP
+				&& desc->DepthStencilState.FrontFace.StencilPassOp == D3D12_STENCIL_OP_KEEP)) ||
 		(desc->DepthStencilState.BackFace.StencilFunc == D3D12_COMPARISON_FUNC_NEVER ||
 			(desc->DepthStencilState.BackFace.StencilDepthFailOp == D3D12_STENCIL_OP_KEEP
-			&& desc->DepthStencilState.BackFace.StencilFailOp == D3D12_STENCIL_OP_KEEP
-			&& desc->DepthStencilState.BackFace.StencilPassOp == D3D12_STENCIL_OP_KEEP));
+				&& desc->DepthStencilState.BackFace.StencilFailOp == D3D12_STENCIL_OP_KEEP
+				&& desc->DepthStencilState.BackFace.StencilPassOp == D3D12_STENCIL_OP_KEEP));
 }
 
 // threadsafe ringbuffer, not suited for bigger allocations
@@ -252,10 +254,10 @@ public:
 		}
 
 		u64 alignedWriteOffset = (u64)align_forward((void*)writeOffset, alignment);
-		
+
 		auto block_byte_offset = alignedWriteOffset % block->Size;
 
-		Check(block_byte_offset + size <= block->Size );
+		Check(block_byte_offset + size <= block->Size);
 
 		upload_allocation_t out;
 		out.virtual_address = block->D12Resource->GetGPUVirtualAddress() + block_byte_offset;
@@ -302,7 +304,7 @@ public:
 			}
 		}
 		for (auto& block : PendingBlocks) {
-			if (!Size(block->Fences) || 
+			if (!Size(block->Fences) ||
 				(Size(block->Fences) && Back(block->Fences).read_offset != block->WriteOffset)) {
 				block_fence_t blockFence;
 				blockFence.fence = fence;
@@ -495,6 +497,7 @@ u64							FenceCounter;
 Array<GPUQueue*>			GPUQueues;
 UploadHeapAllocator			ConstantsAllocator;
 DescriptorAllocator			GpuDescriptorsAllocator;
+DescriptorAllocator			CpuConstantsDescriptorsCacheAllocator;
 GPUFenceHandle				CreateFence(GPUQueue* queue);
 Ringbuffer<GPUFenceHandle>	FrameFences;
 
@@ -503,6 +506,7 @@ d12_stats_t					FrameStats;
 
 void				InitRenderingEngines() {
 	GpuDescriptorsAllocator = std::move(DescriptorAllocator(512 * 1024, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true));
+	CpuConstantsDescriptorsCacheAllocator = std::move(DescriptorAllocator(512 * 1024, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, false));
 	ConstantsAllocator = std::move(UploadHeapAllocator());
 }
 
@@ -778,17 +782,23 @@ struct root_table_parameter_t {
 	u32 root_index;
 };
 
-struct root_parameter_t {
-	RootParameterEnum type;
+struct root_parameter_meta_t {
+	RootParameterEnum	type;
 	union {
 		root_table_parameter_t table;
 	};
+};
+
+struct root_parameter_bind_t {
+	u32	commited : 1;
+	u32 constants_commited : 1;
+	u32 src_array_offset : 30;
 	struct {
 		union {
 			struct {
 				GPU_DESC_HANDLE gpu_handle;
 				CPU_DESC_HANDLE cpu_handle;
-				u32				src_array_offset;
+				CPU_DESC_HANDLE cbv_cpu_handle;
 			} table;
 		};
 	} binding;
@@ -832,12 +842,10 @@ public:
 #endif
 	//
 	struct {
-		Array<CPU_DESC_HANDLE>					DstDescRanges;
-		Array<u32>								DstDescSizes;
 		Array<CPU_DESC_HANDLE>					SrcDescRanges;
 		Array<u32>								SrcDescRangeSizes;
 		Hashmap<u64, constantbuffer_cpudata_t>	ConstantBuffers;
-		Hashmap<u64, root_parameter_t>			Params;
+		Hashmap<u64, root_parameter_bind_t>		Params;
 	} Root;
 	struct {
 		D3D12_VIEWPORT							Viewport;
@@ -858,8 +866,8 @@ public:
 		ID3D12DescriptorHeap*	DescriptorHeaps[2];
 		ID3D12PipelineState*	PSO;
 	} Common;
-	PipelineStateBindings*	Bindings;
-	PipelineTypeEnum		Type;
+	PipelineStateBindings*		Bindings;
+	PipelineTypeEnum			Type;
 
 	void ResetState() {
 		Graphics = {};
@@ -882,8 +890,6 @@ public:
 
 		ZeroMemory(&Compute.PipelineDesc, sizeof(Compute.PipelineDesc));
 
-		Clear(Root.DstDescRanges);
-		Clear(Root.DstDescSizes);
 		Clear(Root.SrcDescRanges);
 		Clear(Root.SrcDescRangeSizes);
 		Clear(Root.ConstantBuffers);
@@ -917,8 +923,6 @@ public:
 		Check(State == CL_EXECUTED);
 
 		FreeMemory(Root.ConstantBuffers);
-		FreeMemory(Root.DstDescRanges);
-		FreeMemory(Root.DstDescSizes);
 		FreeMemory(Root.Params);
 		FreeMemory(Root.SrcDescRanges);
 		FreeMemory(Root.SrcDescRangeSizes);
@@ -965,7 +969,7 @@ public:
 
 			return free;
 		}
-		
+
 		GPUCommandList* list;
 		_new(list, Usage, allocator, Queue, this);
 		PushBack(CommandLists, list);
@@ -1248,7 +1252,7 @@ void Close(GPUCommandList* list) {
 	}
 	Clear(list->Root.ConstantBuffers);
 	ResetRootBindingMappings(list);
-	
+
 	VerifyHr(list->D12CommandList->Close());
 }
 
@@ -1416,7 +1420,7 @@ void Execute(GPUCommandList* list) {
 #endif
 	}
 
-	PushBack(executionList, (ID3D12CommandList*) *list->D12CommandList);
+	PushBack(executionList, (ID3D12CommandList*)*list->D12CommandList);
 	auto queue = list->Queue;
 	auto signalValue = queue->FenceValue;
 
@@ -1428,7 +1432,7 @@ void Execute(GPUCommandList* list) {
 #endif
 
 	queue->LastSignaledFence = list->Fence;
-	
+
 	Fences[list->Fence.handle].value = signalValue;
 
 	list->State = CL_EXECUTED;
@@ -1467,6 +1471,7 @@ void EndCommandsFrame(GPUQueue* mainQueue) {
 
 	// fence read with last fence from queue(!)
 	GpuDescriptorsAllocator.FenceTemporaryAllocations(GetLastSignaledFence(mainQueue));
+	CpuConstantsDescriptorsCacheAllocator.FenceTemporaryAllocations(GetLastSignaledFence(mainQueue));
 	ConstantsAllocator.FenceTemporaryAllocations(GetLastSignaledFence(mainQueue));
 
 	auto frameFence = GetLastSignaledFence(mainQueue);
@@ -1486,6 +1491,7 @@ void EndCommandsFrame(GPUQueue* mainQueue) {
 	}
 
 	GpuDescriptorsAllocator.FreeTemporaryAllocations();
+	CpuConstantsDescriptorsCacheAllocator.FreeTemporaryAllocations();
 	ConstantsAllocator.FreeTemporaryAllocations();
 
 #if COLLECT_RENDER_STATS
@@ -1556,7 +1562,7 @@ void ResourceTracker::Transition(resource_slice_t slice, D3D12_RESOURCE_STATES d
 				CurrentState[slice.handle].resource_state = after;
 			}
 		}
-		else if(!pState) {
+		else if (!pState) {
 			ExpectedState[slice.handle].resource_state = (u32)desired;
 			ExpectedState[slice.handle].per_subresource_tracking = 0;
 
@@ -1569,7 +1575,7 @@ void ResourceTracker::Transition(resource_slice_t slice, D3D12_RESOURCE_STATES d
 			auto subresNum = GetResourceInfo(slice.handle)->subresources_num;
 			auto query = slice;
 
-			auto after = pState->resource_state != RESOURCE_STATE_UNKNOWN 
+			auto after = pState->resource_state != RESOURCE_STATE_UNKNOWN
 				? GetNextState(Owner->Queue->Type, (D3D12_RESOURCE_STATES)pState->resource_state, desired)
 				: desired;
 
@@ -1584,7 +1590,7 @@ void ResourceTracker::Transition(resource_slice_t slice, D3D12_RESOURCE_STATES d
 					// we go to one state per res, drop rest
 					Remove(CurrentSubresourceState, query);
 				}
-				else if(pState->resource_state != RESOURCE_STATE_UNKNOWN){
+				else if (pState->resource_state != RESOURCE_STATE_UNKNOWN) {
 					auto before = (D3D12_RESOURCE_STATES)pState->resource_state;
 					if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, after, true)) {
 						EnqueueTransition(GetResourceFast(slice.handle)->resource, subresIndex, before, after);
@@ -1638,7 +1644,7 @@ void ResourceTracker::Transition(resource_slice_t slice, D3D12_RESOURCE_STATES d
 			if (NeedStateChange(Owner->Queue->Type, GetResourceTransitionInfo(slice.handle)->heap_type, before, desired)) {
 				auto after = GetNextState(Owner->Queue->Type, before, desired);
 				EnqueueTransition(GetResourceFast(slice.handle)->resource, slice.subresource - 1, before, after);
-				Set(CurrentSubresourceState, slice, (u32) after);
+				Set(CurrentSubresourceState, slice, (u32)after);
 				Get(CurrentState, slice.handle)->per_subresource_tracking = 1;
 			}
 		}
@@ -2062,7 +2068,7 @@ void GetRootParamsForBindings(
 	u32 start, u32 end,
 	Array<D3D12_DESCRIPTOR_RANGE> &rootRangesArray,
 	Array<D3D12_ROOT_PARAMETER> &rootParamsArray,
-	Hashmap<u64, root_parameter_t> &RootParams,
+	Hashmap<u64, root_parameter_meta_t> &RootParams,
 	Array<root_range_offset_t> &offsetsArray) {
 
 	auto rangeIndex = (u32)Size(rootRangesArray);
@@ -2137,7 +2143,7 @@ void GetRootParamsForBindings(
 	auto tableHash = Hash::MurmurHash2_64(rootRangesArray.DataPtr + offsets.index, offsets.num, 0);
 
 	// prepare param info for runtime binding
-	root_parameter_t rootParamInfo;
+	root_parameter_meta_t rootParamInfo;
 	rootParamInfo.table.length = currentTableSlot;
 	rootParamInfo.table.root_index = (u32)Size(rootParamsArray);
 	Check(uavsOffset <= (u32)currentTableSlot);
@@ -2169,7 +2175,7 @@ Array<V> GetValuesScratch(Hashmap<K, V>  & Hm) {
 template<typename K, typename V>
 Array<K> GetKeysScratch(Hashmap<K, V>  & Hm) {
 	Array<K> A(GetThreadScratchAllocator());
-	
+
 	for (auto kv : Hm) {
 		PushBack(A, kv.key);
 	}
@@ -2201,9 +2207,9 @@ void DebugPrintRoot(D3D12_ROOT_SIGNATURE_DESC const& desc) {
 			case D3D12_SHADER_VISIBILITY_ALL:
 				return "ALL";
 			case D3D12_SHADER_VISIBILITY_VERTEX:
-				return "PIX";
-			case D3D12_SHADER_VISIBILITY_PIXEL:
 				return "VERT";
+			case D3D12_SHADER_VISIBILITY_PIXEL:
+				return "PIX";
 			};
 			return "?";
 		};
@@ -2252,8 +2258,8 @@ public:
 	Hashmap<TextId, shader_binding_t>				Texture2DParams;
 	Hashmap<TextId, shader_binding_t>				RWTexture2DParams;
 	Hashmap<TextId, shader_constantvariable_t>		ConstantVarParams;
-	Hashmap<u64,	shader_constantbuffer_t>		ConstantBuffers;
-	Hashmap<u64,	root_parameter_t>				RootParams;
+	Hashmap<u64, shader_constantbuffer_t>		ConstantBuffers;
+	Hashmap<u64, root_parameter_meta_t>			RootParams;
 
 	ID3D12RootSignature* RootSignature;
 
@@ -2261,7 +2267,7 @@ protected:
 	void PrepareInternal(
 		Hashmap<TextId, constantvariable_meta_t>& constantVariables,
 		Hashmap<TextId, shader_input_desc_t>& bindInputs,
-		Hashmap<TextId, constantbuffer_meta_t>& constantBuffers) 
+		Hashmap<TextId, constantbuffer_meta_t>& constantBuffers)
 	{
 		auto bindKeys = GetKeysScratch(bindInputs);
 		quicksort(bindKeys.DataPtr, 0, bindKeys.Size, [&](TextId a, TextId b) -> bool { return bindInputs[a] < bindInputs[b]; });
@@ -2448,7 +2454,7 @@ public:
 
 		ID3D12ShaderReflection* csReflection;
 		VerifyHr(D3DReflect(csBytecode.bytecode, csBytecode.bytesize, IID_PPV_ARGS(&csReflection)));
-		
+
 		Verify(GetConstantBuffersAndVariables(csReflection, constantBuffers, constantVariables));
 		Verify(GetInputBindingSlots(csReflection, bindInputs, D3D12_SHADER_VISIBILITY_ALL));
 
@@ -2530,67 +2536,20 @@ void SetDescriptorHeaps(GPUCommandList* list, ID3D12DescriptorHeap* viewsHeap, I
 	list->D12CommandList->SetDescriptorHeaps(samplersHeap ? 2 : 1, list->Common.DescriptorHeaps);
 }
 
-void SetRootParams(GPUCommandList* list) {
-	if (Size(list->Root.DstDescRanges) && Size(list->Root.SrcDescRanges)) {
-		GD12Device->CopyDescriptors(
-			(u32)Size(list->Root.DstDescRanges),
-			list->Root.DstDescRanges.DataPtr, list->Root.DstDescSizes.DataPtr,
-			(u32)Size(list->Root.SrcDescRanges),
-			list->Root.SrcDescRanges.DataPtr, list->Root.SrcDescRangeSizes.DataPtr,
-			D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-	}
-
-	for (auto kv : list->Root.ConstantBuffers) {
-		auto const& cbData = kv.value;
-		if (cbData.commited == 0) {
-			auto const& cb = list->Bindings->ConstantBuffers[kv.key];
-			auto allocation = ConstantsAllocator.AllocateTemporary(list->Bindings->ConstantBuffers[kv.key].bytesize);
-
-			Check(Contains(list->Root.Params, cb.param_hash));
-
-			D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
-			cbvDesc.BufferLocation = allocation.virtual_address;
-			cbvDesc.SizeInBytes = (cb.bytesize | 0xFF) + 1;
-			GD12Device->CreateConstantBufferView(&cbvDesc, offseted_handle(list->Root.Params[cb.param_hash].binding.table.cpu_handle, cb.table_slot, GD12CbvSrvUavDescIncrement));
-
-			memcpy(allocation.write_ptr, kv.value.write_ptr, cb.bytesize);
-#if COLLECT_RENDER_STATS
-			list->Stats.constants_bytes_uploaded += cb.bytesize;
-#endif
-		}
-	}
-
-	SetDescriptorHeaps(list, GpuDescriptorsAllocator.D12DescriptorHeap.Ptr, nullptr);
-
-	if (list->Type == PIPELINE_GRAPHICS) {
-		for (auto kv : list->Root.Params) {
-			list->D12CommandList->SetGraphicsRootDescriptorTable(kv.value.table.root_index, kv.value.binding.table.gpu_handle);
-		}
-	}
-	else if (list->Type == PIPELINE_COMPUTE) {
-		for (auto kv : list->Root.Params) {
-			list->D12CommandList->SetComputeRootDescriptorTable(kv.value.table.root_index, kv.value.binding.table.gpu_handle);
-		}
-	}
-}
-
-void ResetRootBindingMappings(GPUCommandList* list) {
-	Clear(list->Root.DstDescRanges);
-	Clear(list->Root.DstDescSizes);
-	Clear(list->Root.SrcDescRanges);
-	Clear(list->Root.SrcDescRangeSizes);
-	Clear(list->Root.Params);
-}
-
 void SetComputeShaderState(GPUCommandList* list, shader_handle cs) {
 	auto bindings = GetComputePipelineStateBindings(cs);
 
-	//if (bindings != list->Bindings) {
+	if (bindings != list->Bindings) {
 		ResetRootBindingMappings(list);
 
 		list->Bindings = bindings;
 		list->Type = PIPELINE_COMPUTE;
-	//}
+
+		list->D12CommandList->SetComputeRootSignature(list->Bindings->RootSignature);
+#if COLLECT_RENDER_STATS
+		list->Stats.compute_root_signature_changes++;
+#endif
+	}
 }
 
 void SetShaderState(GPUCommandList* list, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory) {
@@ -2598,12 +2557,17 @@ void SetShaderState(GPUCommandList* list, shader_handle vs, shader_handle ps, ve
 
 	list->Graphics.VertexFactory = vertexFactory;
 
-	//if (bindings != list->Bindings) {
+	if (bindings != list->Bindings) {
 		ResetRootBindingMappings(list);
 
 		list->Bindings = bindings;
 		list->Type = PIPELINE_GRAPHICS;
-	//}
+
+		list->D12CommandList->SetGraphicsRootSignature(list->Bindings->RootSignature);
+#if COLLECT_RENDER_STATS
+		list->Stats.graphic_root_signature_changes++;
+#endif
+	}
 }
 
 void SetTopology(GPUCommandList* list, D3D_PRIMITIVE_TOPOLOGY topology) {
@@ -2786,7 +2750,7 @@ void SetDepthStencil(GPUCommandList* list, resource_dsv_t dsv) {
 	if (IsValid(dsv.slice.handle)) {
 		list->Graphics.DSV = dsv;
 	}
-	else{
+	else {
 		list->Graphics.DSV = {};
 	}
 }
@@ -2821,6 +2785,8 @@ void SetBlendState(GPUCommandList* list, u32 index, D3D12_RENDER_TARGET_BLEND_DE
 	list->Graphics.PipelineDesc.BlendState.RenderTarget[index] = desc;
 }
 
+void SetRootParams(GPUCommandList* list);
+
 void PreDraw(GPUCommandList* list) {
 	auto d12cl = *list->D12CommandList;
 
@@ -2846,10 +2812,6 @@ void PreDraw(GPUCommandList* list) {
 	d12cl->RSSetViewports(1, &list->Graphics.Viewport);
 	d12cl->RSSetScissorRects(1, &list->Graphics.ScissorRect);
 
-	d12cl->SetGraphicsRootSignature(list->Bindings->RootSignature);
-#if COLLECT_RENDER_STATS
-	list->Stats.graphic_root_signature_changes++;
-#endif
 	SetRootParams(list);
 	if (list->Common.PSO != pipelineState) {
 		d12cl->SetPipelineState(pipelineState);
@@ -2883,7 +2845,7 @@ void PostDraw(GPUCommandList* list) {
 	}
 }
 
-void Draw(GPUCommandList* list, u32 vertexCount, u32 startVertex, u32 instances, u32 startInstance)  {
+void Draw(GPUCommandList* list, u32 vertexCount, u32 startVertex, u32 instances, u32 startInstance) {
 	PreDraw(list);
 #if COLLECT_RENDER_STATS
 	list->Stats.draw_calls++;
@@ -2914,10 +2876,6 @@ void PreDispatch(GPUCommandList* list) {
 
 	auto pipelineState = GetPipelineState(&query);
 
-	d12cl->SetComputeRootSignature(list->Bindings->RootSignature);
-#if COLLECT_RENDER_STATS
-	list->Stats.compute_root_signature_changes++;
-#endif
 	SetRootParams(list);
 	if (list->Common.PSO != pipelineState) {
 		d12cl->SetPipelineState(pipelineState);
@@ -2943,46 +2901,184 @@ void Dispatch(GPUCommandList* list, u32 threadGroupX, u32 threadGroupY, u32 thre
 	PostDispatch(list);
 }
 
-root_parameter_t* PrepareRootParam(GPUCommandList* list, u64 paramHash) {
+root_parameter_bind_t* PrepareRootParam(GPUCommandList* list, u64 paramHash) {
 	Check(Contains(list->Bindings->RootParams, paramHash));
 	auto const& param = list->Bindings->RootParams[paramHash];
 
 	auto rootParamPtr = Get(list->Root.Params, paramHash);
 	if (!rootParamPtr) {
-		list->Root.Params[paramHash].table = param.table;
-		
-		auto tableDstDescriptors = GpuDescriptorsAllocator.AllocateTemporary(param.table.length);
+		list->Root.Params[paramHash] = {};
+		rootParamPtr = Get(list->Root.Params, paramHash);
+		rootParamPtr->commited = 0;
+		rootParamPtr->constants_commited = 1;
+		rootParamPtr->binding.table.cbv_cpu_handle = {};
 
-		list->Root.Params[paramHash].binding.table.gpu_handle = GetGPUHandle(tableDstDescriptors);
-		list->Root.Params[paramHash].binding.table.cpu_handle = GetCPUHandle(tableDstDescriptors);
+		rootParamPtr->src_array_offset = (u32)Size(list->Root.SrcDescRanges);
 
-		PushBack(list->Root.DstDescRanges, GetCPUHandle(tableDstDescriptors));
+		// first subtable has srvs and uavs
+		auto firstSubtableSlotsNum = param.table.cbv_range_offset;
 
-		// copy only srvs and uavs, cbv are created directly on heap
-		auto copySlots = param.table.cbv_range_offset;
-		PushBack(list->Root.DstDescSizes, copySlots);
+		Check(rootParamPtr->src_array_offset == (u32)Size(list->Root.SrcDescRanges));
+		Resize(list->Root.SrcDescRanges, Size(list->Root.SrcDescRanges) + firstSubtableSlotsNum);
+		Resize(list->Root.SrcDescRangeSizes, Size(list->Root.SrcDescRangeSizes) + firstSubtableSlotsNum);
 
-		list->Root.Params[paramHash].binding.table.src_array_offset = (u32)Size(list->Root.SrcDescRanges);
-		Resize(list->Root.SrcDescRanges, Size(list->Root.SrcDescRanges) + copySlots);
-		Resize(list->Root.SrcDescRangeSizes, Size(list->Root.SrcDescRangeSizes) + copySlots);
+		if (param.table.cbv_range_offset != param.table.length) {
+			rootParamPtr->constants_commited = 0;
+		}
 
 		Check(param.table.cbv_range_offset <= param.table.length);
 		Check(param.table.cbv_range_offset >= 0);
 		Check(param.table.length >= 0);
 
-		for (auto i = 0u;i < param.table.uav_range_offset; ++i) {
+		// fill with null srvs
+		for (auto i = 0u; i < param.table.uav_range_offset; ++i) {
 			list->Root.SrcDescRanges[i] = G_NULL_TEXTURE2D_SRV_DESCRIPTOR;
 			list->Root.SrcDescRangeSizes[i] = 1;
 		}
-		for (auto i = param.table.uav_range_offset;i < copySlots; ++i) {
+		for (auto i = param.table.uav_range_offset; i < firstSubtableSlotsNum; ++i) {
 			list->Root.SrcDescRanges[i] = G_NULL_TEXTURE2D_UAV_DESCRIPTOR;
 			list->Root.SrcDescRangeSizes[i] = 1;
 		}
-
-		rootParamPtr = Get(list->Root.Params, paramHash);
+	}
+	else if (rootParamPtr->commited == 1) {
+		rootParamPtr->commited = 0;
 	}
 
 	return rootParamPtr;
+}
+
+void SetRootParams(GPUCommandList* list) {
+	SetDescriptorHeaps(list, GpuDescriptorsAllocator.D12DescriptorHeap.Ptr, nullptr);
+
+	for (auto kv : list->Root.Params) {
+		if (kv.value.commited == 0) {
+			Check(Contains(list->Bindings->RootParams, kv.key));
+			auto const& param = list->Bindings->RootParams[kv.key];
+
+			// we need to allocate new table and copy data inside
+			// allocate GPU visible heap
+			auto tableDstDescriptors = GpuDescriptorsAllocator.AllocateTemporary(param.table.length);
+
+			kv.value.binding.table.gpu_handle = GetGPUHandle(tableDstDescriptors);
+			kv.value.binding.table.cpu_handle = GetCPUHandle(tableDstDescriptors);
+
+			GD12Device->CopyDescriptors(
+				1,
+				&kv.value.binding.table.cpu_handle, &param.table.cbv_range_offset,
+				// only up to cbv 
+				param.table.cbv_range_offset,
+				list->Root.SrcDescRanges.DataPtr + kv.value.src_array_offset, &param.table.cbv_range_offset,
+				D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+			if (kv.value.constants_commited == 0) {
+				// allocate constants mini-table & copy prev data
+
+				Check(param.table.cbv_range_offset < param.table.length);
+				auto oldHandle = kv.value.binding.table.cbv_cpu_handle;
+				kv.value.binding.table.cbv_cpu_handle = GetCPUHandle(CpuConstantsDescriptorsCacheAllocator.AllocateTemporary(param.table.length - param.table.cbv_range_offset));
+
+				u32 cbvsNum = param.table.length - param.table.cbv_range_offset;
+				Check(cbvsNum);
+
+				// copy old table if necessary
+				if (oldHandle.ptr) {
+					GD12Device->CopyDescriptors(
+						1, &kv.value.binding.table.cbv_cpu_handle, &cbvsNum,
+						1, &oldHandle, &cbvsNum,
+						D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+				}
+				/*kv.value.constants_commited = 1;*/
+			}
+			/*kv.value.commited = 1;*/
+		}
+	}
+
+	// go through all constant buffers, create view and set to table if needed
+	for (auto kv : list->Root.ConstantBuffers) {
+		auto& cbData = kv.value;
+		if (cbData.commited == 0) {
+			auto const& cb = list->Bindings->ConstantBuffers[kv.key];
+			auto allocation = ConstantsAllocator.AllocateTemporary(list->Bindings->ConstantBuffers[kv.key].bytesize);
+			auto const& param = list->Bindings->RootParams[cb.param_hash];
+
+			Check(Contains(list->Root.Params, cb.param_hash));
+			Check(list->Root.Params[cb.param_hash].commited == 0);
+			Check(list->Root.Params[cb.param_hash].constants_commited == 0);
+
+			D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
+			cbvDesc.BufferLocation = allocation.virtual_address;
+			cbvDesc.SizeInBytes = (cb.bytesize | 0xFF) + 1;
+
+			Check(cb.table_slot - param.table.cbv_range_offset >= 0);
+			Check(cb.table_slot - param.table.cbv_range_offset < param.table.length - param.table.cbv_range_offset);
+
+			// create view in cpu mini table
+			GD12Device->CreateConstantBufferView(&cbvDesc,
+				offseted_handle(list->Root.Params[cb.param_hash].binding.table.cbv_cpu_handle,
+					cb.table_slot - param.table.cbv_range_offset,
+					GD12CbvSrvUavDescIncrement));
+
+			memcpy(allocation.write_ptr, kv.value.write_ptr, cb.bytesize);
+#if COLLECT_RENDER_STATS
+			list->Stats.constants_bytes_uploaded += cb.bytesize;
+#endif
+			cbData.commited = 1;
+		}
+	}
+
+	// second pass to copy second part of table
+	auto copy_cbv_descriptors = [](GPUCommandList* list, decltype(*list->Root.Params.begin()) & kv) {
+		auto const& param = list->Bindings->RootParams[kv.key];
+
+		if (kv.value.constants_commited == 0) {
+			CPU_DESC_HANDLE dst = offseted_handle(kv.value.binding.table.cpu_handle, param.table.cbv_range_offset, GD12CbvSrvUavDescIncrement);
+			u32 cbvsNum = param.table.length - param.table.cbv_range_offset;
+			Check(cbvsNum);
+
+			GD12Device->CopyDescriptors(
+				1,
+				&dst, &cbvsNum,
+				1,
+				&kv.value.binding.table.cbv_cpu_handle, &cbvsNum,
+				D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+			kv.value.constants_commited = 1;
+		}
+	};
+
+	// merge second pass with param set
+	if (list->Type == PIPELINE_GRAPHICS) {
+		for (auto kv : list->Root.Params) {
+			if (kv.value.commited == 0) {
+				copy_cbv_descriptors(list, kv);
+
+				list->D12CommandList->SetGraphicsRootDescriptorTable(list->Bindings->RootParams[kv.key].table.root_index, kv.value.binding.table.gpu_handle);
+				kv.value.commited = 1;
+#if COLLECT_RENDER_STATS
+				list->Stats.graphic_root_params_set++;
+#endif
+			}
+		}
+	}
+	else if (list->Type == PIPELINE_COMPUTE) {
+		for (auto kv : list->Root.Params) {
+			if (kv.value.commited == 0) {
+				copy_cbv_descriptors(list, kv);
+
+				list->D12CommandList->SetComputeRootDescriptorTable(list->Bindings->RootParams[kv.key].table.root_index, kv.value.binding.table.gpu_handle);
+				kv.value.commited = 1;
+#if COLLECT_RENDER_STATS
+				list->Stats.compute_root_params_set++;
+#endif
+			}
+		}
+	}
+}
+
+void ResetRootBindingMappings(GPUCommandList* list) {
+	Clear(list->Root.SrcDescRanges);
+	Clear(list->Root.SrcDescRangeSizes);
+	Clear(list->Root.Params);
 }
 
 upload_allocation_t AllocateSmallUploadMemory(GPUCommandList*, u64 size, u64 alignment) {
@@ -3040,10 +3136,25 @@ void*	GetConstantWritePtr(GPUCommandList* list, TextId var, size_t writeSize) {
 		cbData.commited = 0;
 
 		list->Root.ConstantBuffers[constantVar.cb_hash_index] = cbData;
+		list->Root.Params[cbInfo.param_hash].commited = 0;
 	}
-	// we need to create new view
+	// we need to indicate need for new view & new table, also copy previous data
+	// optimize: no copy if single param
 	else if (pCB->commited) {
 		pCB->commited = 0;
+		auto const& cbInfo = list->Bindings->ConstantBuffers[constantVar.cb_hash_index];
+		list->Root.Params[cbInfo.param_hash].commited = 0;
+		list->Root.Params[cbInfo.param_hash].constants_commited = 0;
+
+		constantbuffer_cpudata_t cbData;
+		cbData.write_ptr = GetThreadScratchAllocator()->Allocate(cbInfo.bytesize, 16);
+		cbData.size = cbInfo.bytesize;
+		cbData.commited = 0;
+
+		// copy & free prev
+		memcpy(cbData.write_ptr, list->Root.ConstantBuffers[constantVar.cb_hash_index].write_ptr, cbInfo.bytesize);
+		GetThreadScratchAllocator()->Free(list->Root.ConstantBuffers[constantVar.cb_hash_index].write_ptr);
+		list->Root.ConstantBuffers[constantVar.cb_hash_index] = cbData;
 	}
 
 	Check(constantVar.bytesize <= list->Bindings->ConstantBuffers[constantVar.cb_hash_index].bytesize);
@@ -3088,11 +3199,14 @@ void SetTexture2D(GPUCommandList* list, TextId slot, resource_srv_t srv) {
 	}
 	auto const& binding = list->Bindings->Texture2DParams[slot];
 	auto rootParamPtr = PrepareRootParam(list, binding.root_parameter_hash);
-	Check(binding.table_slot < rootParamPtr->table.length);
+	Check(binding.table_slot < list->Bindings->RootParams[binding.root_parameter_hash].table.length);
 
-	auto index = rootParamPtr->binding.table.src_array_offset + binding.table_slot;
-	list->Root.SrcDescRanges[index] = srv.cpu_descriptor;
-	list->Root.SrcDescRangeSizes[index] = 1;
+	auto index = rootParamPtr->src_array_offset + binding.table_slot;
+	if (list->Root.SrcDescRanges[index].ptr != srv.cpu_descriptor.ptr) {
+		list->Root.SrcDescRanges[index] = srv.cpu_descriptor;
+		list->Root.SrcDescRangeSizes[index] = 1;
+		rootParamPtr->commited = 0;
+	}
 
 	if (!srv.fixed_state) {
 		list->ResourcesStateTracker.Transition(srv.slice, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -3105,12 +3219,12 @@ void SetRWTexture2D(GPUCommandList* list, TextId slot, resource_uav_t uav) {
 		Warning(Format("rwtexture2d %s not found\n", (const char*)GetString(slot)), true, TYPE_ID("ShaderBindings"));
 		return;
 	}
-	
+
 	auto const& binding = list->Bindings->RWTexture2DParams[slot];
 	auto rootParamPtr = PrepareRootParam(list, binding.root_parameter_hash);
-	Check(binding.table_slot < rootParamPtr->table.length);
+	Check(binding.table_slot < list->Bindings->RootParams[binding.root_parameter_hash].table.length);
 
-	auto index = rootParamPtr->binding.table.src_array_offset + binding.table_slot;
+	auto index = rootParamPtr->src_array_offset + binding.table_slot;
 	list->Root.SrcDescRanges[index] = uav.cpu_descriptor;
 	list->Root.SrcDescRangeSizes[index] = 1;
 
@@ -3125,6 +3239,7 @@ void ShutdownRenderingEngines() {
 
 	call_destructor(&ConstantsAllocator);
 	call_destructor(&GpuDescriptorsAllocator);
+	call_destructor(&CpuConstantsDescriptorsCacheAllocator);
 
 	for (auto kv : RootSignatures) {
 		kv.value.ptr->Release();
