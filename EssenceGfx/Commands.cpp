@@ -842,12 +842,15 @@ public:
 #endif
 	//
 	struct {
+		ID3D12RootSignature*					D12Signature;
 		Array<CPU_DESC_HANDLE>					SrcDescRanges;
 		Array<u32>								SrcDescRangeSizes;
 		Hashmap<u64, constantbuffer_cpudata_t>	ConstantBuffers;
 		Hashmap<u64, root_parameter_bind_t>		Params;
 	} Root;
 	struct {
+		shader_handle							VS;
+		shader_handle							PS;
 		D3D12_VIEWPORT							Viewport;
 		D3D12_RECT								ScissorRect;
 		D3D_PRIMITIVE_TOPOLOGY					Topology;
@@ -860,6 +863,7 @@ public:
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC		PipelineDesc;
 	} Graphics;
 	struct {
+		shader_handle							CS;
 		D3D12_COMPUTE_PIPELINE_STATE_DESC		PipelineDesc;
 	} Compute;
 	struct {
@@ -2537,37 +2541,47 @@ void SetDescriptorHeaps(GPUCommandList* list, ID3D12DescriptorHeap* viewsHeap, I
 }
 
 void SetComputeShaderState(GPUCommandList* list, shader_handle cs) {
-	auto bindings = GetComputePipelineStateBindings(cs);
+	if (list->Compute.CS != cs) {
+		list->Compute.CS = cs;
 
-	if (bindings != list->Bindings) {
-		ResetRootBindingMappings(list);
+		auto bindings = GetComputePipelineStateBindings(cs);
 
-		list->Bindings = bindings;
-		list->Type = PIPELINE_COMPUTE;
+		if (bindings != list->Bindings) {
+			ResetRootBindingMappings(list);
 
-		list->D12CommandList->SetComputeRootSignature(list->Bindings->RootSignature);
+			list->Bindings = bindings;
+			list->Type = PIPELINE_COMPUTE;
+
+			list->D12CommandList->SetComputeRootSignature(list->Bindings->RootSignature);
 #if COLLECT_RENDER_STATS
-		list->Stats.compute_root_signature_changes++;
+			list->Stats.compute_root_signature_changes++;
 #endif
+		}
 	}
 }
 
 void SetShaderState(GPUCommandList* list, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory) {
-	auto bindings = GetPipelineStateBindings(vs, ps);
+	if (list->Graphics.VS != vs || list->Graphics.PS != ps) {
+		list->Graphics.VS = vs;
+		list->Graphics.PS = ps;
 
-	list->Graphics.VertexFactory = vertexFactory;
+		auto bindings = GetPipelineStateBindings(vs, ps);
+		if (bindings != list->Bindings) {
+			ResetRootBindingMappings(list);
 
-	if (bindings != list->Bindings) {
-		ResetRootBindingMappings(list);
+			list->Bindings = bindings;
+			list->Type = PIPELINE_GRAPHICS;
 
-		list->Bindings = bindings;
-		list->Type = PIPELINE_GRAPHICS;
-
-		list->D12CommandList->SetGraphicsRootSignature(list->Bindings->RootSignature);
+			if (list->Root.D12Signature != list->Bindings->RootSignature) {
+				list->Root.D12Signature = list->Bindings->RootSignature;
+				list->D12CommandList->SetGraphicsRootSignature(list->Bindings->RootSignature);
 #if COLLECT_RENDER_STATS
-		list->Stats.graphic_root_signature_changes++;
+				list->Stats.graphic_root_signature_changes++;
 #endif
+			}
+		}
 	}
+	list->Graphics.VertexFactory = vertexFactory;
 }
 
 void SetTopology(GPUCommandList* list, D3D_PRIMITIVE_TOPOLOGY topology) {
@@ -2803,16 +2817,12 @@ void PreDraw(GPUCommandList* list) {
 	}
 	query.Graphics.graphics_desc.DSVFormat = list->Graphics.DSV.format;
 
-	query.Graphics.vs = static_cast<GraphicsPipelineStateBindings*>(list->Bindings)->VS;
-	query.Graphics.ps = static_cast<GraphicsPipelineStateBindings*>(list->Bindings)->PS;
+	query.Graphics.vs = list->Graphics.VS;
+	query.Graphics.ps = list->Graphics.PS;
 	query.Graphics.vertex_factory = list->Graphics.VertexFactory;
 
 	auto pipelineState = GetPipelineState(&query);
 
-	d12cl->RSSetViewports(1, &list->Graphics.Viewport);
-	d12cl->RSSetScissorRects(1, &list->Graphics.ScissorRect);
-
-	SetRootParams(list);
 	if (list->Common.PSO != pipelineState) {
 		d12cl->SetPipelineState(pipelineState);
 		list->Common.PSO = pipelineState;
@@ -2820,6 +2830,12 @@ void PreDraw(GPUCommandList* list) {
 		list->Stats.graphic_pipeline_state_changes++;
 #endif
 	}
+
+	d12cl->RSSetViewports(1, &list->Graphics.Viewport);
+	d12cl->RSSetScissorRects(1, &list->Graphics.ScissorRect);
+
+	SetRootParams(list);
+
 	d12cl->IASetPrimitiveTopology(list->Graphics.Topology);
 	d12cl->IASetVertexBuffers(0, list->Graphics.VertexStreamsNum, list->Graphics.VertexStreams);
 
@@ -2872,7 +2888,7 @@ void PreDispatch(GPUCommandList* list) {
 	query.Type = PIPELINE_COMPUTE;
 	query.Compute.compute_desc = list->Compute.PipelineDesc;
 
-	query.Compute.cs = static_cast<ComputePipelineStateBindings*>(list->Bindings)->CS;
+	query.Compute.cs = list->Compute.CS;
 
 	auto pipelineState = GetPipelineState(&query);
 
