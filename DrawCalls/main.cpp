@@ -48,6 +48,8 @@ model_handle icosahedronmodel;
 model_handle torusmodel;
 model_handle tubemodel;
 
+resource_handle texture;
+
 Array<render_data_t> RenderObjects;
 random_generator RNG;
 float ObjectsToRender = 100;
@@ -86,6 +88,12 @@ void Init() {
 		RenderObjects[i].scale = float3(1, 1, 1);
 		RenderObjects[i].model = models[RNG.u32Next() % _countof(models)];
 	}
+
+	auto initialCopies = GetCommandList(GGPUCopyQueue, NAME_("Copy"));
+	auto local_texture = LoadDDSFromFile(TEXT_("Textures/uvchecker.dds"), initialCopies, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	texture = local_texture.resource;
+
+	Execute(initialCopies);
 }
 
 
@@ -216,6 +224,7 @@ void Tick(float fDeltaTime) {
 	auto renderData = GetModelRenderData(RenderObjects[0].model);
 	SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
 	SetConstant(drawList, TEXT_("ViewProj"), viewProjMatrix);
+	SetTexture2D(drawList, TEXT_("ColorTex"), GetSRV(texture));
 
 	u32 N = (u32)ObjectsToRender;
 	for (u32 o = 0; o < N; ++o) {
@@ -258,6 +267,7 @@ void Tick(float fDeltaTime) {
 	CopyResource(drawList, GetCurrentBackbuffer(), RT_A);
 	
 	RenderUserInterface(drawList);
+	TransitionBarrier(drawList, Slice(GetCurrentBackbuffer()), D3D12_RESOURCE_STATE_PRESENT);
 	Execute(drawList);
 
 	Present();

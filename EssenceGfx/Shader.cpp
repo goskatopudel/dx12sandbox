@@ -127,7 +127,7 @@ void Compile(shader_handle handle, shader_key_t const& desc) {
 	ID3DBlob *codeBlob = nullptr;
 	ID3DBlob *errBlob = nullptr;
 
-	auto shaderCode = ReadFile(GetString(desc.file));
+	auto shaderCode = ReadEntireFile(GetString(desc.file));
 
 	auto compileHresult = D3DCompile2(shaderCode.data_ptr, shaderCode.bytesize, GetString(desc.file), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, GetString(desc.function), GetProfileStr(desc.profile),
 		0, 0, 0, nullptr, 0, &codeBlob, &errBlob);

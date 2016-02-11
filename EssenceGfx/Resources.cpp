@@ -383,7 +383,12 @@ resource_handle CreateCommittedResource(D3D12_RESOURCE_DESC const* desc, Resourc
 	return handle;
 }
 
-resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor, float clearDepth, u8 clearStencil) {
+resource_handle	CreateTexture(
+	u64 width, u32 height, u32 depthOrArraySize,
+	DXGI_FORMAT format, 
+	TextureFlags textureFlags, 
+	const char* debugName, 
+	float4 clearColor, float clearDepth, u8 clearStencil) {
 
 	Check(!((textureFlags & ALLOW_RENDER_TARGET) && (textureFlags & ALLOW_DEPTH_STENCIL)));
 
@@ -391,7 +396,7 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 	desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	desc.Width = width;
 	desc.Height = height;
-	desc.DepthOrArraySize = 1;
+	desc.DepthOrArraySize = depthOrArraySize;
 	desc.MipLevels = (textureFlags & TEX_MIPMAPPED) ? 0 : 1;
 	desc.Format = format;
 	desc.SampleDesc.Count = 1;
@@ -446,9 +451,9 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 				srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 				srvDesc.Format = format;
 				srvDesc.Texture2D.MipLevels = 1;
-				srvDesc.Texture2D.MostDetailedMip = subIndex;
+				srvDesc.Texture2D.MostDetailedMip = subIndex % depthOrArraySize;
 				srvDesc.Texture2D.ResourceMinLODClamp = 0;
-				srvDesc.Texture2D.PlaneSlice = 0;
+				srvDesc.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
 				srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 				GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, subIndex + 1));
@@ -493,9 +498,9 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 			srvDesc.Format = GetDepthReadFormat(format);
 			srvDesc.Texture2D.MipLevels = 1;
-			srvDesc.Texture2D.MostDetailedMip = subIndex;
+			srvDesc.Texture2D.MostDetailedMip = subIndex % depthOrArraySize;
 			srvDesc.Texture2D.ResourceMinLODClamp = 0;
-			srvDesc.Texture2D.PlaneSlice = 0;
+			srvDesc.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
 			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, viewsPerSubresource * (subIndex + 1) + VIEW_DEPTH));
@@ -521,8 +526,8 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 				D3D12_RENDER_TARGET_VIEW_DESC rtvView = {};
 				rtvView.Format = format;
 				rtvView.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-				rtvView.Texture2D.MipSlice = subIndex;
-				rtvView.Texture2D.PlaneSlice = 0;
+				rtvView.Texture2D.MipSlice = subIndex % depthOrArraySize;
+				rtvView.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
 
 				GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, &rtvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations, subIndex));
 			}
@@ -540,8 +545,8 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 				D3D12_UNORDERED_ACCESS_VIEW_DESC uavView = {};
 				uavView.Format = format;
 				uavView.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-				uavView.Texture2D.MipSlice = subIndex;
-				uavView.Texture2D.PlaneSlice = 0;
+				uavView.Texture2D.MipSlice = subIndex % depthOrArraySize;
+				uavView.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
 
 				GD12Device->CreateUnorderedAccessView(ResourcesTable[handle].resource, nullptr, &uavView, ToCPUHandle(ResourcesViews[handle.GetIndex()].uav_locations, subIndex));
 			}
@@ -611,6 +616,10 @@ resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, Texture
 	}
 
 	return handle;
+}
+
+resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor, float clearDepth, u8 clearStencil) {
+	return CreateTexture(width, height, (textureFlags & TEX_CUBEMAP) ? 6u : 1u, format, textureFlags, debugName, clearColor, clearDepth, clearStencil);
 }
 
 const u32			MAX_SWAP_BUFFERS = 8;

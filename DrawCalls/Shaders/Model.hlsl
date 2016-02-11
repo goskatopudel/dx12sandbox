@@ -24,6 +24,7 @@ struct VOut
 };
 
 Texture2D ColorTex : register(t0);
+SamplerState Sampler : register(s0);
 
 VOut VShader(VIn input, uint vertexId : SV_VertexID)
 {
@@ -43,5 +44,5 @@ VOut VShader(VIn input, uint vertexId : SV_VertexID)
 
 void PShader(VOut interpolated, out float4 outColor : SV_TARGET0)
 {
-	outColor = float4(interpolated.texcoord, 0, 1) * ColorTex[uint2(0,0)];
+	outColor = ColorTex.Sample(Sampler, interpolated.texcoord);
 }

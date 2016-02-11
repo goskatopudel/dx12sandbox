@@ -230,6 +230,7 @@
   <ItemGroup>
     <ClCompile Include="Camera.cpp" />
     <ClCompile Include="Commands.cpp" />
+    <ClCompile Include="DDSLoader.cpp" />
     <ClCompile Include="Descriptors.cpp" />
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />

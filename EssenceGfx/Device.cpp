@@ -138,6 +138,7 @@ void PrintDeviceInfo(ID3D12Device* device) {
 
 	debugf(Format(
 		"Node count: %u\n"
+		"Node sharing tier: %u\n"
 		"Resource binding tier: %d\n"
 		"Resource heap tier: %d\n"
 		"Tiled resources tier: %d\n"
@@ -148,6 +149,7 @@ void PrintDeviceInfo(ID3D12Device* device) {
 		"Typed UAV load additional formats: %d\n"
 		"VP and RT array index with no GS: %d\n",
 		device->GetNodeCount(),
+		options.CrossNodeSharingTier,
 		options.ResourceBindingTier,
 		options.ResourceHeapTier,
 		options.TiledResourcesTier,

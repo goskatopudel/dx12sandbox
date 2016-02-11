@@ -5,7 +5,7 @@
 
 namespace Essence {
 
-void FreeMemory(file_read_result& read) {
+void FreeMemory(file_read_result_t read) {
 	if (read.data_ptr) {
 		Check(read.allocator);
 		read.allocator->Free(read.data_ptr);
@@ -13,8 +13,8 @@ void FreeMemory(file_read_result& read) {
 	}
 }
 
-file_read_result ReadFile(const char* filename, IAllocator* allocator) {
-	file_read_result result = {};
+file_read_result_t ReadEntireFile(const char* filename, IAllocator* allocator) {
+	file_read_result_t result = {};
 
 	char * buffer = nullptr;
 	long length = 0;

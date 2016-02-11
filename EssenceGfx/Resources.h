@@ -16,6 +16,18 @@ struct input_layout_element_t {
 	const char*		semantic_name;
 };
 
+enum class ResourceLoadEnum : u8 {
+	Unknown,
+	Success,
+	FileNotFound,
+	FileCorrupt
+};
+
+struct resource_load_result_t {
+	ResourceLoadEnum	result;
+	resource_handle		resource;
+};
+
 namespace VertexInput {
 static const input_layout_element_t POSITION_4_32F	= { DXGI_FORMAT_R32G32B32A32_FLOAT	, "POSITION" };
 static const input_layout_element_t POSITION_3_32F	= { DXGI_FORMAT_R32G32B32_FLOAT		, "POSITION" };
@@ -46,7 +58,8 @@ enum TextureFlags {
 	ALLOW_DEPTH_STENCIL = 2,
 	ALLOW_UNORDERED_ACCESS = 4,
 	TEX_MIPMAPPED = 8,
-	TEX_VIRTUAL = 0x10
+	TEX_CUBEMAP = 0x10,
+	TEX_VIRTUAL = 0x20
 };
 DEFINE_ENUM_FLAG_OPERATORS(TextureFlags);
 
@@ -86,14 +99,19 @@ struct subresource_read_info_t {
 	DXGI_FORMAT	format;
 };
 
+resource_handle	CreateTexture(u64 width, u32 height, u32 depthOrArraySize, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
 resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
 resource_handle	CreateBuffer(ResourceHeapType heapType, u64 size, BufferFlags flags, const char* debugName);
 void			CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size);
+void			CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData);
 void			CopyFromCpuToSubresources(class GPUQueue* queue, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData);
 resource_handle CreateReadbackBufferForResource(resource_handle targetedResource);
 void			CopyToReadbackBuffer(GPUCommandList* list, resource_handle dst, resource_handle src);
-void			UnmapReadbackBuffer(resource_handle buffer);
+
 void			MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<subresource_read_info_t> *outReadInfo);
+void			UnmapReadbackBuffer(resource_handle buffer);
+
+resource_load_result_t LoadDDSFromFile(TextId file, GPUCommandList* commandList, D3D12_RESOURCE_STATES state);
 
 void			InitResources();
 void			ShutdownResources();
