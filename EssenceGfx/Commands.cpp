@@ -2692,8 +2692,36 @@ u64 CalculatePipelineQueryHash(pipeline_query_t const* query) {
 
 ID3D12PipelineState* CreatePipelineState(pipeline_query_t const* query, u64 hash);
 
-void UpdatePipelineStates() {
+void FlushShaderChanges() {
+	Hashmap<graphics_pipeline_root_key, i32> InvalidGraphicBindings;
+	Hashmap<compute_pipeline_root_key, i32> InvalidComputeBindings;
+	Hashmap<PipelineStateBindings*, i32> InvalidPSOs;
+
+	for (auto kv : CachedGraphicsBindings) {
+		if (GetShaderMetadata(kv.key.VS).recompiled || GetShaderMetadata(kv.key.PS).recompiled) {
+			Set(InvalidPSOs, kv.value, 1);
+			Set(InvalidGraphicBindings, kv.key, 1);
+		}
+	}
+	for (auto kv : CachedComputeBindings) {
+		if (GetShaderMetadata(kv.key.CS).recompiled) {
+			Set(InvalidPSOs, kv.value, 1);
+			Set(InvalidComputeBindings, kv.key, 1);
+		}
+	}
+
+	for (auto kv : InvalidGraphicBindings) {
+		Remove(CachedGraphicsBindingHash, kv.key);
+		Remove(CachedGraphicsBindings, kv.key);
+	}
+	for (auto kv : InvalidComputeBindings) {
+		Remove(CachedComputeBindingHash, kv.key);
+		Remove(CachedComputeBindings, kv.key);
+	}
+	// todo-optimize: clear cache from old objects
+
 	for (auto kv : PipelineDescriptors) {
+		// todo-optimize: check if shaders changed
 		CreatePipelineState(&PipelineDescriptors[kv.key].query, kv.key);
 	}
 }

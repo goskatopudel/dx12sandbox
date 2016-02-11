@@ -92,7 +92,7 @@ template<typename K, typename V> void	FreeMemory(Hashmap<K, V> &Hm) {
 }
 
 template<typename K, typename V> void	Reserve(Hashmap<K, V> &Hm, size_t min_capacity) {
-	auto capacity = Size(Hm.buckets_);
+	auto capacity = Size(Hm.Buckets);
 	if (capacity < min_capacity) {
 		Rehash(Hm, min_capacity);
 	}
@@ -315,6 +315,10 @@ template<typename K, typename V> void	Rehash(Hashmap<K, V>& Hm, size_t bucket_co
 template<typename K, typename V> bool Remove(Hashmap<K, V>& Hm, K key) {
 	using namespace Hash;
 	typedef Hashmap<K, V> Type;
+
+	if (Hm.Size == 0) {
+		return false;
+	}
 
 	size_t hash = MurmurHash2_64(&key, sizeof(K), 0) & C_62Bits;
 	size_t iBucketStart = hash % Size(Hm.Buckets);

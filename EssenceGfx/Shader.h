@@ -28,9 +28,14 @@ struct shader_bytecode_t {
 	u64		bytesize;
 };
 
+struct shader_metadata_t {
+	u32		recompiled : 1;
+};
+
 shader_handle		GetShader(ResourceNameId file, TextId function, ShaderProfileEnum profile);
 shader_bytecode_t	GetShaderBytecode(shader_handle shader);
-AString	GetShaderDisplayString(shader_handle shader);
+AString				GetShaderDisplayString(shader_handle shader);
+shader_metadata_t	GetShaderMetadata(shader_handle shader);
 
 void ReloadShaders();
 void FreeShadersMemory();

@@ -99,7 +99,7 @@ template<typename T> void	SetConstant(GPUCommandList* list, TextId var, T const&
 }
 
 void						GetD3D12StateDefaults(D3D12_RASTERIZER_DESC *pDest);
-void						UpdatePipelineStates();
+void						FlushShaderChanges();
 
 
 struct commands_stats_t {

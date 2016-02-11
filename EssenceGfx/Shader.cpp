@@ -5,6 +5,7 @@
 #include "Hashmap.h"
 #include "Files.h"
 #include "Debug.h"
+#include "Commands.h"
 
 namespace Essence {
 
@@ -52,10 +53,15 @@ struct shader_key_t {
 	ShaderProfileEnum	profile;
 };
 
+struct shader_record_t {
+	shader_key_t		key;
+	shader_metadata_t	metadata;
+};
+
 void Compile(shader_handle handle, shader_key_t const& desc);
 
 Hashmap<shader_key_t, shader_handle>		ShadersIndex;
-Freelist<shader_key_t, shader_handle>		ShadersTable;
+Freelist<shader_record_t, shader_handle>	ShadersTable;
 Array<shader_bytecode_t>					ShadersFastData;
 RWLock										ReadWriteLock;
 
@@ -65,7 +71,8 @@ shader_handle		Create(shader_key_t const& key) {
 	auto handle = Create(ShadersTable);
 	Set(ShadersIndex, key, handle);
 
-	ShadersTable[handle] = key;
+	ShadersTable[handle] = {};
+	ShadersTable[handle].key = key;
 
 	if (Size(ShadersFastData) < handle.GetIndex() + 1) {
 		Resize(ShadersFastData, handle.GetIndex() + 1);
@@ -107,7 +114,7 @@ shader_bytecode_t	GetShaderBytecode(shader_handle shader) {
 }
 
 AString	GetShaderDisplayString(shader_handle shader) {
-	return Format("%s:%s()", (cstr)GetString(ShadersTable[shader].file), (cstr)GetString(ShadersTable[shader].function));
+	return Format("%s:%s()", (cstr)GetString(ShadersTable[shader].key.file), (cstr)GetString(ShadersTable[shader].key.function));
 }
 
 void*	Copy(IAllocator* allocator, const void* src, u64 bytesize) {
@@ -134,6 +141,8 @@ void Compile(shader_handle handle, shader_key_t const& desc) {
 		if (fast.bytecode) {
 			BytecodeAllocator->Free(fast.bytecode);
 			fast = {};
+
+			record.metadata.recompiled = 1;
 		}
 
 		fast.bytecode = Copy(BytecodeAllocator, codeBlob->GetBufferPointer(), codeBlob->GetBufferSize());
@@ -167,11 +176,26 @@ void Compile(shader_handle handle, shader_key_t const& desc) {
 	ComRelease(errBlob);
 }
 
+shader_metadata_t	GetShaderMetadata(shader_handle shader) {
+	ReaderScope readScope(&ReadWriteLock);
+	return ShadersTable[shader].metadata;
+}
+
 void ReloadShaders() {
 	ReadWriteLock.LockExclusive();
 
 	for (auto kv : ShadersIndex) {
 		Compile(kv.value, kv.key);
+	}
+
+	ReadWriteLock.UnlockExclusive();
+
+	FlushShaderChanges();
+
+	ReadWriteLock.LockExclusive();
+
+	for (auto kv : ShadersIndex) {
+		ShadersTable[kv.value].metadata.recompiled = 0;
 	}
 
 	ReadWriteLock.UnlockExclusive();
