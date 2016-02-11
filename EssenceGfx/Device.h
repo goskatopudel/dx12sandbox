@@ -19,7 +19,7 @@ extern i32						GD12CbvSrvUavDescIncrement;
 extern i32						GD12SamplerDescIncrement;
 extern i32						GD12DsvDescIncrement;
 
-void							InitDevice(HWND	hwnd, bool useWarpAdapter, bool enableDebugLayer);
+void							InitDevice(HWND	hwnd, bool useWarpAdapter, bool enableDebugLayer, i32 adapterIndex);
 void							ShutdownDevice();
 
 void							CreateSwapChain(ID3D12CommandQueue* queue);

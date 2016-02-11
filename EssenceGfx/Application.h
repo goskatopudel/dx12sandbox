@@ -49,7 +49,7 @@ extern display_settings_t	GDisplaySettings;
 extern char					GWorkingDir[1024];
 extern size_t				GWorkingDirLength;
 
-void						InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum flags, ApplicationPresentProfileEnum profile);
+void						InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum flags, ApplicationPresentProfileEnum profile, i32 adapterIndex = -1);
 i32							RunApplicationMainLoop();
 
 }

@@ -57,7 +57,8 @@ void DestroyEvent(HANDLE h) {
 void InitDevice(
 	HWND	hwnd,
 	bool	useWarpAdapter,
-	bool	enableDebugLayer)
+	bool	enableDebugLayer,
+	i32		adapterIndex)
 {
 	IDXGIFactory4* DXGIFactory;
 	VerifyHr(CreateDXGIFactory1(IID_PPV_ARGS(&DXGIFactory)));
@@ -78,8 +79,13 @@ void InitDevice(
 			));
 	}
 	else {
+		IDXGIAdapter1* adapter = nullptr;
+		if (adapterIndex != -1) {
+			DXGIFactory->EnumAdapters1(adapterIndex, &adapter);
+		}
+
 		VerifyHr(D3D12CreateDevice(
-			nullptr,
+			adapter,
 			MinFeatureLevel,
 			IID_PPV_ARGS(&GD12Device)
 			));

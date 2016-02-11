@@ -66,7 +66,7 @@ void ShutdownSDL(SDL_Window *sdlWindow) {
 	SDL_Quit();
 }
 
-void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum flags, ApplicationPresentProfileEnum profile) {
+void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum flags, ApplicationPresentProfileEnum profile, i32 adapterIndex) {
 	GDisplaySettings.resolution.x = windowWidth;
 	GDisplaySettings.resolution.y = windowHeight;
 
@@ -115,7 +115,7 @@ void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum fla
 
 	InitSDL(&SDLWindow);
 
-	InitDevice(GDisplaySettings.hwnd, false, flags & APP_FLAG_D3D12_DEBUG);
+	InitDevice(GDisplaySettings.hwnd, false, flags & APP_FLAG_D3D12_DEBUG, adapterIndex);
 	InitRenderingEngines();
 	InitResources();
 

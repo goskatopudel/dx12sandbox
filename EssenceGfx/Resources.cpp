@@ -439,6 +439,8 @@ resource_handle	CreateTexture(
 
 	ResourcesFastTable[handle.GetIndex()].is_read_only = readOnly;
 
+	u64 planeSize = width * height;
+
 	if (!(textureFlags & ALLOW_DEPTH_STENCIL)) {
 		if (!(textureFlags & TEX_MIPMAPPED)) {
 			ResourcesViews[handle.GetIndex()].srv_locations = ViewDescHeap.Allocate(1);
@@ -451,9 +453,9 @@ resource_handle	CreateTexture(
 				srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 				srvDesc.Format = format;
 				srvDesc.Texture2D.MipLevels = 1;
-				srvDesc.Texture2D.MostDetailedMip = subIndex % depthOrArraySize;
+				srvDesc.Texture2D.MostDetailedMip = subIndex % planeSize;
 				srvDesc.Texture2D.ResourceMinLODClamp = 0;
-				srvDesc.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
+				srvDesc.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
 				srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 				GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, subIndex + 1));
@@ -498,9 +500,9 @@ resource_handle	CreateTexture(
 			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 			srvDesc.Format = GetDepthReadFormat(format);
 			srvDesc.Texture2D.MipLevels = 1;
-			srvDesc.Texture2D.MostDetailedMip = subIndex % depthOrArraySize;
+			srvDesc.Texture2D.MostDetailedMip = subIndex % planeSize;
 			srvDesc.Texture2D.ResourceMinLODClamp = 0;
-			srvDesc.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
+			srvDesc.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
 			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, viewsPerSubresource * (subIndex + 1) + VIEW_DEPTH));
@@ -526,8 +528,8 @@ resource_handle	CreateTexture(
 				D3D12_RENDER_TARGET_VIEW_DESC rtvView = {};
 				rtvView.Format = format;
 				rtvView.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-				rtvView.Texture2D.MipSlice = subIndex % depthOrArraySize;
-				rtvView.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
+				rtvView.Texture2D.MipSlice = subIndex % planeSize;
+				rtvView.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
 
 				GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, &rtvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations, subIndex));
 			}
@@ -545,8 +547,8 @@ resource_handle	CreateTexture(
 				D3D12_UNORDERED_ACCESS_VIEW_DESC uavView = {};
 				uavView.Format = format;
 				uavView.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-				uavView.Texture2D.MipSlice = subIndex % depthOrArraySize;
-				uavView.Texture2D.PlaneSlice = subIndex / depthOrArraySize;
+				uavView.Texture2D.MipSlice = subIndex % planeSize;
+				uavView.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
 
 				GD12Device->CreateUnorderedAccessView(ResourcesTable[handle].resource, nullptr, &uavView, ToCPUHandle(ResourcesViews[handle.GetIndex()].uav_locations, subIndex));
 			}
