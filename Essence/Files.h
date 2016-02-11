@@ -16,7 +16,7 @@ struct file_read_result {
 	IAllocator*		allocator;
 };
 
-file_read_result	ReadFile(const char* filename, IAllocator* allocator = GetThreadScratchAllocator());
+file_read_result	ReadFile(const char* filename, IAllocator* allocator = GetMallocAllocator());
 void				FreeMemory(file_read_result& read);
 
 }

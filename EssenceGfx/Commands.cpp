@@ -541,9 +541,7 @@ public:
 	void				EndFrame();
 };
 
-GPUFenceHandle GetLastSignaledFence(GPUQueue* queue) {
-	return queue->LastSignaledFence;
-}
+GPUFenceHandle GetLastSignaledFence(GPUQueue* queue);
 
 u64 GPUQueue::GetCompletedValue() {
 	return D12Fence->GetCompletedValue();
@@ -899,6 +897,7 @@ public:
 
 		ZeroMemory(&Compute.PipelineDesc, sizeof(Compute.PipelineDesc));
 
+		Root.D12Signature = nullptr;
 		Clear(Root.SrcDescRanges);
 		Clear(Root.SrcDescRangeSizes);
 		Clear(Root.ConstantBuffers);
@@ -1142,7 +1141,7 @@ void GPUProfiler::ResolveFrameProfilingQueries(GPUCommandList* list) {
 	fence.num = QueryIssueIndex - QueryResolveIndex;
 	PushBack(Fences, fence);
 
-	ReadFences[WriteIndex] = GetFence(list);
+	ReadFences[WriteIndex] = GetCompletionFence(list);
 	WriteIndex = (WriteIndex + 1) % MAX_QUEUED_PROFILER_FRAMES;
 }
 
@@ -1238,12 +1237,12 @@ void GPUProfilerContext::End(gpu_sample *sample) {
 	PushBack(Samples, stored);
 }
 
-GPUFenceHandle GetFence(GPUCommandList* list) {
+GPUFenceHandle GetCompletionFence(GPUCommandList* list) {
 	Check(list->State == CL_RECORDING || list->State == CL_CLOSED);
 	return list->Fence;
 }
 
-GPUFenceHandle GetFence(GPUQueue* queue) {
+GPUFenceHandle GetLastSignaledFence(GPUQueue* queue) {
 	return queue->LastSignaledFence;
 }
 
@@ -3190,6 +3189,7 @@ void SetRootParams(GPUCommandList* list) {
 		for (auto kv : list->Root.Params) {
 			if (kv.value.commited == 0) {
 				copy_cbv_descriptors(list, kv);
+				Check(Contains(list->Bindings->RootParams, kv.key));
 
 				list->D12CommandList->SetGraphicsRootDescriptorTable(list->Bindings->RootParams[kv.key].table.root_index, kv.value.binding.table.gpu_handle);
 				kv.value.commited = 1;

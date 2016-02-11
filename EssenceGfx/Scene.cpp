@@ -229,6 +229,22 @@ void ParallelRenderSceneRange(const void* InArgs, Job*) {
 	SetRenderTarget(drawCmds, 0, GetRTV(Args.Setup->buffer));
 	SetDepthStencil(drawCmds, GetDSV(Args.Setup->depthbuffer));
 
+	if (Args.from != Args.to) {
+		auto entity = Args.pScene->Entities[(*Args.pEntityHandles)[Args.from]];
+		auto renderData = GetModelRenderData(entity.model);
+
+		auto viewProjMatrix = XMMatrixTranspose(
+			pCamera->GetViewMatrix()
+			* XMMatrixPerspectiveFovLH(3.14f * 0.25f, (float)GDisplaySettings.resolution.x / (float)GDisplaySettings.resolution.y, 0.01f, 1000.f));
+
+		SetShaderState(drawCmds, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
+
+		SetConstant(drawCmds, TEXT_("ViewProj"), viewProjMatrix);
+	}
+
+	SetViewport(drawCmds, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
+	SetTopology(drawCmds, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
 	for (auto i : MakeRange(Args.from, Args.to)) {
 		auto entity = Args.pScene->Entities[(*Args.pEntityHandles)[i]];
 
@@ -240,39 +256,30 @@ void ParallelRenderSceneRange(const void* InArgs, Job*) {
 				XMLoadFloat3((XMFLOAT3*)&entity.position)
 				));
 
-		auto viewProjMatrix = XMMatrixTranspose(
-			pCamera->GetViewMatrix()
-			* XMMatrixPerspectiveFovLH(3.14f * 0.25f, (float)GDisplaySettings.resolution.x / (float)GDisplaySettings.resolution.y, 0.01f, 1000.f));
-
 		auto renderData = GetModelRenderData(entity.model);
 
-		for (auto i : MakeRange(renderData->submeshes.num)) {
-			SetShaderState(drawCmds, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
-			SetViewport(drawCmds, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
-			SetTopology(drawCmds, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		buffer_location_t vb;
+		vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
+		vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
+		vb.stride = sizeof(mesh_vertex_t);
 
-			SetConstant(drawCmds, TEXT_("World"), worldMatrix);
+		SetVertexStream(drawCmds, 0, vb);
 
+		buffer_location_t ib;
+		ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
+		ib.size = renderData->indices_num * sizeof(u32);
+		ib.stride = sizeof(u32);
 
-			auto transformations = Scene.AnimationStates[entity.animation].transformations;
-			SetConstant(drawCmds, TEXT_("BoneTransform"), transformations.elements, sizeof(xmmatrix) * transformations.num);
-			SetConstant(drawCmds, TEXT_("ViewProj"), viewProjMatrix);
+		SetIndexBuffer(drawCmds, ib);
 
-			buffer_location_t vb;
-			vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();
-			vb.size = renderData->vertices_num * sizeof(mesh_vertex_t);
-			vb.stride = sizeof(mesh_vertex_t);
+		SetShaderState(drawCmds, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
 
-			SetVertexStream(drawCmds, 0, vb);
+		SetConstant(drawCmds, TEXT_("World"), worldMatrix);
+		auto transformations = Scene.AnimationStates[entity.animation].transformations;
+		SetConstant(drawCmds, TEXT_("BoneTransform"), transformations.elements, sizeof(xmmatrix) * transformations.num);
 
-			buffer_location_t ib;
-			ib.address = GetResourceFast(renderData->index_buffer)->resource->GetGPUVirtualAddress();
-			ib.size = renderData->indices_num * sizeof(u32);
-			ib.stride = sizeof(u32);
-
-			SetIndexBuffer(drawCmds, ib);
-
-			auto submesh = renderData->submeshes[i];
+		for (auto j : MakeRange(renderData->submeshes.num)) {
+			auto submesh = renderData->submeshes[j];
 			DrawIndexed(drawCmds, submesh.index_count, submesh.start_index, submesh.base_vertex);
 		}
 	}

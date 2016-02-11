@@ -95,8 +95,8 @@ void			CopyToReadbackBuffer(GPUCommandList* list, resource_handle dst, resource_
 void			UnmapReadbackBuffer(resource_handle buffer);
 void			MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<subresource_read_info_t> *outReadInfo);
 
-void	InitResources();
-void	ShutdownResources();
+void			InitResources();
+void			ShutdownResources();
 
 struct resource_t {
 	ID3D12Resource*				resource;

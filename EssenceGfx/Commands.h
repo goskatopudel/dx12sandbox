@@ -45,8 +45,8 @@ void						WaitForCompletion(GPUQueue* queue);
 
 GPUCommandList*				GetCommandList(GPUQueue* queue, ResourceNameId usage);
 ID3D12GraphicsCommandList*	GetD12CommandList(GPUCommandList*);
-GPUFenceHandle				GetFence(GPUQueue*);
-GPUFenceHandle				GetFence(GPUCommandList*);
+GPUFenceHandle				GetLastSignaledFence(GPUQueue*);
+GPUFenceHandle				GetCompletionFence(GPUCommandList*);
 void						Close(GPUCommandList*);
 void						Execute(GPUCommandList*);
 

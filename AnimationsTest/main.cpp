@@ -235,7 +235,7 @@ void Tick(float fDeltaTime) {
 
 		UpdateScene(testScene, fDeltaTime);
 
-		auto clearFinished = GetFence(drawList);
+		auto clearFinished = GetCompletionFence(drawList);
 		Execute(drawList);
 
 		forward_render_scene_setup setup = {};
@@ -245,9 +245,9 @@ void Tick(float fDeltaTime) {
 		setup.viewport = {  };
 		ParallelRenderScene(GGPUMainQueue, testScene, &setup);
 
-		QueueWait(GGPUCopyQueue, GetFence(GGPUMainQueue));
+		QueueWait(GGPUCopyQueue, GetLastSignaledFence(GGPUMainQueue));
 		CopyResource(copyList, RT_B, RT_A);
-		auto copyFinished = GetFence(copyList);
+		auto copyFinished = GetCompletionFence(copyList);
 		Execute(copyList);
 		drawList = GetCommandList(GGPUMainQueue, NAME_("RenderWork"));
 		QueueWait(GGPUMainQueue, copyFinished);

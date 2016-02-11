@@ -213,6 +213,10 @@ void Tick(float fDeltaTime) {
 	SetViewport(drawList, (float)GDisplaySettings.resolution.x, (float)GDisplaySettings.resolution.y);
 	SetTopology(drawList, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
+	auto renderData = GetModelRenderData(RenderObjects[0].model);
+	SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
+	SetConstant(drawList, TEXT_("ViewProj"), viewProjMatrix);
+
 	u32 N = (u32)ObjectsToRender;
 	for (u32 o = 0; o < N; ++o) {
 		float3 scale = RenderObjects[o].scale;
@@ -227,14 +231,9 @@ void Tick(float fDeltaTime) {
 				XMLoadFloat3((XMFLOAT3*)&position)
 				));
 
-		auto renderData = GetModelRenderData(RenderObjects[o].model);
+		renderData = GetModelRenderData(RenderObjects[o].model);
 
 		SetShaderState(drawList, SHADER_(Model, VShader, VS_5_1), SHADER_(Model, PShader, PS_5_1), renderData->vertex_layout);
-
-		if (o == 0) 
-		{
-			SetConstant(drawList, TEXT_("ViewProj"), viewProjMatrix);
-		}
 
 		buffer_location_t vb;
 		vb.address = GetResourceFast(renderData->vertex_buffer)->resource->GetGPUVirtualAddress();

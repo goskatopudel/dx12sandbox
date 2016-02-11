@@ -164,7 +164,7 @@ void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum fla
 	GApplicationInitializeFunction();
 
 	// after issuing init copies waiting for completion
-	QueueWait(GGPUMainQueue, GetFence(GGPUCopyQueue));
+	QueueWait(GGPUMainQueue, GetLastSignaledFence(GGPUCopyQueue));
 }
 
 i32 RunApplicationMainLoop() {

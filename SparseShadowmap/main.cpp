@@ -442,7 +442,7 @@ u32 MapTiles(resource_handle virtualShadowmap, PagePool* pagePool, GPUQueue* que
 			PushBack(PagesList, kv.value);
 			Remove(MappingState->mappedPages, kv.key);
 		}
-		pagePool->Free(PagesList, GetFence(queue));
+		pagePool->Free(PagesList, GetLastSignaledFence(queue));
 	}
 
 	{	PROFILE_SCOPE(pages_recycling);
@@ -692,7 +692,7 @@ void Tick(float fDeltaTime) {
 	{	GPU_PROFILE_SCOPE(depthCL, copying_to_readback);
 		CopyToReadbackBuffer(depthCL, PagesCPU[PagesWriteIndex], PagesNeeded);
 	}
-	PagesCPUReady[PagesWriteIndex] = GetFence(depthCL);
+	PagesCPUReady[PagesWriteIndex] = GetCompletionFence(depthCL);
 	PagesWriteIndex = (PagesWriteIndex + 1) % _countof(PagesCPU);
 
 	// flushing commands 
