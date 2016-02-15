@@ -1,3 +1,4 @@
 #pragma once
 
-void ShowMemoryInfo();
+void ShowMemoryWindow();
+void ShowStatsWindow();

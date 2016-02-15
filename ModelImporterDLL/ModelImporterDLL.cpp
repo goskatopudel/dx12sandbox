@@ -348,7 +348,7 @@ allocated_memory_handle LoadModel(const char* path, model_definition* outModelDe
 		if (mesh->HasTangentsAndBitangents() && hasTangents) {
 			for (auto v = 0u; v < V; ++v) {
 				imported.tangents[vertex_offset + v] = XMFLOAT3(mesh->mTangents[v].x, mesh->mTangents[v].y, mesh->mTangents[v].z);
-				imported.bitangents.push_back(XMFLOAT3(mesh->mBitangents[v].x, mesh->mBitangents[v].y, mesh->mBitangents[v].z));
+				imported.bitangents[vertex_offset + v] = XMFLOAT3(mesh->mBitangents[v].x, mesh->mBitangents[v].y, mesh->mBitangents[v].z);
 			}
 		}
 		if (mesh->HasTextureCoords(0) && hasTextureCoords) {

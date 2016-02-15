@@ -37,6 +37,8 @@ static const input_layout_element_t TEXCOORD_32F	= { DXGI_FORMAT_R32G32_FLOAT		,
 static const input_layout_element_t BONE_INDICES_8U	= { DXGI_FORMAT_R8G8B8A8_UINT		, "BONE_INDICES" };
 static const input_layout_element_t BONE_WEIGHTS_32F= { DXGI_FORMAT_R32G32B32A32_FLOAT	, "BONE_WEIGHTS" };
 static const input_layout_element_t COLOR_RGBA_8U =	  { DXGI_FORMAT_R8G8B8A8_UNORM		, "COLOR" };
+static const input_layout_element_t TANGENT_3_32F = { DXGI_FORMAT_R32G32B32_FLOAT		, "TANGENT" };
+static const input_layout_element_t BITANGENT_3_32F = { DXGI_FORMAT_R32G32B32_FLOAT		, "BITANGENT" };
 };
 
 struct buffer_location_t {
@@ -111,6 +113,7 @@ void			CopyToReadbackBuffer(GPUCommandList* list, resource_handle dst, resource_
 void			MapReadbackBuffer(resource_handle buffer, resource_handle readAs, Array<subresource_read_info_t> *outReadInfo);
 void			UnmapReadbackBuffer(resource_handle buffer);
 
+// todo-consistency: NameId
 resource_load_result_t LoadDDSFromFile(TextId file, GPUCommandList* commandList, D3D12_RESOURCE_STATES state);
 
 void			InitResources();

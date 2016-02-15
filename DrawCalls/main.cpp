@@ -27,6 +27,7 @@ ICameraControler *CameraControlerPtr = &FpsCamera;
 void CreateScreenResources() {
 	if (IsValid(RT_A)) {
 		Delete(RT_A);
+		Delete(DepthBuffer);
 	}
 
 	auto x = GDisplaySettings.resolution.x;
@@ -96,44 +97,6 @@ void Init() {
 	Execute(initialCopies);
 }
 
-
-void ShowStatsWindow() {
-	ImGui::Begin("Stats");
-
-	auto stats = GetLastFrameStats();
-
-	ImGui::BulletText("Command lists");
-	ImGui::Indent();
-	ImGui::Text("All / Patchup / Executions: %u / %u / %u", stats->command_lists_num, stats->patchup_command_lists_num, stats->executions_num);
-	ImGui::Unindent();
-
-	ImGui::Separator();
-
-	ImGui::BulletText("Commands");
-	ImGui::Indent();
-	ImGui::Text("Graphics");
-	ImGui::Text("PSO changes:\nRootSignature changes:\nRoot params set:\nDrawcalls:"); ImGui::SameLine();
-	ImGui::Text("%u\n%u\n%u\n%u",
-		stats->command_stats.graphic_pipeline_state_changes,
-		stats->command_stats.graphic_root_signature_changes,
-		stats->command_stats.graphic_root_params_set,
-		stats->command_stats.draw_calls);
-
-	ImGui::Text("Compute");
-	ImGui::Text("PSO changes:\nRootSignature changes:\nRoot params set:\nDispatches:"); ImGui::SameLine();
-	ImGui::Text("%u\n%u\n%u\n%u",
-		stats->command_stats.compute_pipeline_state_changes,
-		stats->command_stats.compute_root_signature_changes,
-		stats->command_stats.compute_root_params_set,
-		stats->command_stats.dispatches);
-
-	ImGui::Text("Common");
-	ImGui::Text("Constants: %llu Kb", Kilobytes(stats->command_stats.constants_bytes_uploaded));
-	ImGui::Unindent();
-
-	ImGui::End();
-}
-
 void Tick(float fDeltaTime) {
 
 	ImGuiIO& io = ImGui::GetIO();
@@ -200,7 +163,7 @@ void Tick(float fDeltaTime) {
 
 	ImGui::ShowTestWindow();
 
-	ShowMemoryInfo();
+	ShowMemoryWindow();
 	ShowStatsWindow();
 
 	PROFILE_END; // ui logic
@@ -289,7 +252,7 @@ int main(int argc, char * argv[]) {
 		CreateScreenResources();
 	};
 
-	InitApplication(1200, 768, APP_FLAG_D3D12_DEBUG, APP_PRESENT_UNTHROTTLED);
+	InitApplication(1200, 768, APP_FLAG_NONE, APP_PRESENT_UNTHROTTLED);
 
 	return RunApplicationMainLoop();
 }

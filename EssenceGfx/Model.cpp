@@ -18,6 +18,8 @@ void FreeModelsMemory() {
 
 	for (auto kv : ModelsByName) {
 		GetMallocAllocator()->Free(Models[kv.value].submeshes.elements);
+		GetMallocAllocator()->Free(Models[kv.value].raw_positions.elements);
+		GetMallocAllocator()->Free(Models[kv.value].raw_indices.elements);
 
 		GetMallocAllocator()->Free(Models[kv.value].skeleton.bone_offsets);
 		GetMallocAllocator()->Free(Models[kv.value].skeleton.bone_node_indices);
@@ -52,32 +54,68 @@ void LoadModel(ResourceNameId name) {
 	Importer::model_definition modelData;
 	auto importedDataHandle = Importer::LoadModel(GetString(name), &modelData);
 
-	Array<mesh_vertex_t> Vertices(GetThreadScratchAllocator());
-
 	u32 maxIndex = 0;
 
-	for (auto i = 0u; i < modelData.verticesNum; ++i) {
+	model_t model = {};
+	allocate_array(&model.raw_positions, modelData.verticesNum, GetMallocAllocator());
+	allocate_array(&model.raw_indices, modelData.indicesNum, GetMallocAllocator());
+	memcpy(model.raw_indices.elements, modelData.indices, sizeof(u32) * modelData.indicesNum);
+
+	Array<u8> Vertices(GetThreadScratchAllocator());
+	u32 vertexStride;
+	vertex_factory_handle vertexLayout = {};
+
+	if (modelData.animationsNum == 0) {
 		mesh_vertex_t vertex;
-		vertex.position = modelData.positions[i];
-		vertex.normal = modelData.normals[i];
-		vertex.texcoord0 = modelData.texcoords[i];
-		vertex.boneIndices = packBoneIndices(modelData.boneIndices[i]);
-		vertex.boneWeights = modelData.boneWeights[i];
-		PushBack(Vertices, vertex);
+		vertexStride = sizeof(vertex);
+		vertexLayout = GetVertexFactory({ VertexInput::POSITION_3_32F, VertexInput::NORMAL_32F, VertexInput::TEXCOORD_32F, 
+			VertexInput::TANGENT_3_32F, VertexInput::BITANGENT_3_32F });
+
+		for (auto i = 0u; i < modelData.verticesNum; ++i) {
+			model.raw_positions[i] = Vec3f(&modelData.positions[i].x);
+
+			vertex.position = modelData.positions[i];
+			vertex.normal = modelData.normals[i];
+			vertex.texcoord0 = modelData.texcoords[i];
+			vertex.tangent = modelData.tangents[i];
+			vertex.bitangent = modelData.bitangents[i];
+			Append(Vertices, (u8*)&vertex, sizeof(vertex));
+		}
+	}
+	else {
+		animated_mesh_vertex_t vertex;
+		vertexStride = sizeof(vertex);
+		vertexLayout = GetVertexFactory({ VertexInput::POSITION_3_32F, VertexInput::NORMAL_32F, VertexInput::TEXCOORD_32F, 
+			VertexInput::TANGENT_3_32F, VertexInput::BITANGENT_3_32F,
+			VertexInput::BONE_INDICES_8U, VertexInput::BONE_WEIGHTS_32F });
+
+		for (auto i = 0u; i < modelData.verticesNum; ++i) {
+			model.raw_positions[i] = Vec3f(&modelData.positions[i].x);
+
+			vertex.position = modelData.positions[i];
+			vertex.normal = modelData.normals[i];
+			vertex.texcoord0 = modelData.texcoords[i];
+			vertex.tangent = modelData.tangents[i];
+			vertex.bitangent = modelData.bitangents[i];
+			vertex.boneIndices = packBoneIndices(modelData.boneIndices[i]);
+			vertex.boneWeights = modelData.boneWeights[i];
+			Append(Vertices, (u8*)&vertex, sizeof(vertex));
+		}
 	}
 
 	auto copyCommands = GetCommandList(GGPUCopyQueue, NAME_("Copy"));
 
-	model_t model = {};
-	model.vertex_buffer = CreateBuffer(DEFAULT_MEMORY, Size(Vertices) * sizeof(mesh_vertex_t), ALLOW_VERTEX_BUFFER, Format("vertex buffer of %s", (const char*)GetString(name)));
-	CopyToBuffer(copyCommands, model.vertex_buffer, Vertices.DataPtr, Size(Vertices) * sizeof(mesh_vertex_t));
+	model.vertex_buffer = CreateBuffer(DEFAULT_MEMORY, Size(Vertices), ALLOW_VERTEX_BUFFER, Format("vertex buffer of %s", (const char*)GetString(name)));
+	model.vertex_stride = vertexStride;
+	CopyToBuffer(copyCommands, model.vertex_buffer, Vertices.DataPtr, Size(Vertices));
 	model.index_buffer = CreateBuffer(DEFAULT_MEMORY, modelData.indicesNum * sizeof(u32), ALLOW_INDEX_BUFFER, Format("index buffer of %s", (const char*)GetString(name)));
 	CopyToBuffer(copyCommands, model.index_buffer, modelData.indices, modelData.indicesNum * sizeof(u32));
+	model.index_stride = (u32)sizeof(u32);
 	model.vertices_num = modelData.verticesNum;
 	model.indices_num = modelData.indicesNum;
 	model.submeshes.num = modelData.submeshesNum;
 	model.submeshes.elements = (mesh_draw_t*)GetMallocAllocator()->Allocate(sizeof(modelData.submeshes[0]) * modelData.submeshesNum, 8);
-	model.vertex_layout = GetVertexFactory({ VertexInput::POSITION_3_32F, VertexInput::NORMAL_32F, VertexInput::TEXCOORD_32F, VertexInput::BONE_INDICES_8U, VertexInput::BONE_WEIGHTS_32F });
+	model.vertex_layout = vertexLayout;
 
 	Execute(copyCommands);
 

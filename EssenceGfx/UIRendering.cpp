@@ -85,7 +85,7 @@ void RenderImDrawLists(ImDrawData *draw_data) {
 	GetD3D12StateDefaults(&rasterizerMode);
 	rasterizerMode.CullMode = D3D12_CULL_MODE_NONE;
 	rasterizerMode.DepthClipEnable = true;
-	SetRasterizer(cmdList, rasterizerMode);
+	SetRasterizerState(cmdList, rasterizerMode);
 
 	D3D12_RENDER_TARGET_BLEND_DESC blendMode = {};
 	blendMode.BlendEnable = true;

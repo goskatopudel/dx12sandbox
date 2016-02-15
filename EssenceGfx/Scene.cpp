@@ -17,7 +17,7 @@ Scene::~Scene() {
 	EntitiesNum = 0;
 }
 
-scene_entity_h SpawnEntity(Scene& Scene, model_handle model) {
+scene_entity_handle SpawnEntity(Scene& Scene, model_handle model) {
 	auto handle = Create(Scene.Entities);
 	Scene.EntitiesNum++;
 
@@ -31,22 +31,22 @@ scene_entity_h SpawnEntity(Scene& Scene, model_handle model) {
 	return handle;
 }
 
-void SetScale(Scene& Scene, scene_entity_h entity, float val) {
+void SetScale(Scene& Scene, scene_entity_handle entity, float val) {
 	Scene.Entities[entity].scale = float3(val, val, val);
 }
 
-void SetPosition(Scene& Scene, scene_entity_h entity, float3 position) {
+void SetPosition(Scene& Scene, scene_entity_handle entity, float3 position) {
 	Scene.Entities[entity].position = position;
 }
 
-void KillEntity(Scene& Scene, scene_entity_h entity) {
+void KillEntity(Scene& Scene, scene_entity_handle entity) {
 	KillAnimation(Scene, entity);
 
 	Delete(Scene.Entities, entity);
 	Scene.EntitiesNum--;
 }
 
-void KillAnimation(Scene& Scene, scene_entity_h entity) {
+void KillAnimation(Scene& Scene, scene_entity_handle entity) {
 	auto animHandle = Scene.Entities[entity].animation;
 
 	if (IsValid(animHandle)) {
@@ -57,7 +57,7 @@ void KillAnimation(Scene& Scene, scene_entity_h entity) {
 	}
 }
 
-void SetAnimation(Scene& Scene, scene_entity_h entity, u32 index, float startTime) {
+void SetAnimation(Scene& Scene, scene_entity_handle entity, u32 index, float startTime) {
 	auto pRenderData = GetModelRenderData(Scene.Entities[entity].model);
 
 	auto animHandle = Scene.Entities[entity].animation;
@@ -82,7 +82,7 @@ void SetAnimation(Scene& Scene, scene_entity_h entity, u32 index, float startTim
 	InitAnimationState(&Scene.AnimationStates[animHandle].state, pRenderData, index);
 }
 
-void MirrorAnimation(Scene& Scene, scene_entity_h dstEntity, scene_entity_h srcEntity) {
+void MirrorAnimation(Scene& Scene, scene_entity_handle dstEntity, scene_entity_handle srcEntity) {
 	Check(Scene.Entities[dstEntity].model == Scene.Entities[srcEntity].model);
 
 	if (IsValid(Scene.Entities[dstEntity].animation)) {
@@ -93,7 +93,7 @@ void MirrorAnimation(Scene& Scene, scene_entity_h dstEntity, scene_entity_h srcE
 	Scene.AnimationStates[Scene.Entities[dstEntity].animation].use_counter++;
 }
 
-void GetSceneAnimations(Scene* pScene, Array<animation_h>* handlesAcc) {
+void GetSceneAnimations(Scene* pScene, Array<animation_handle>* handlesAcc) {
 	for (auto handle : pScene->AnimationStates.Keys()) {
 		PushBack(*handlesAcc, handle);
 	}
@@ -117,7 +117,7 @@ void UpdateAnimations(Scene& Scene, float dt) {
 
 struct ParallelUpdateAnimationsRange_Payload {
 	Scene*			pScene;
-	animation_h*	workspace;
+	animation_handle*	workspace;
 	u32				from;
 	u32				to;
 	float			dt;
@@ -166,7 +166,7 @@ void ParallelUpdateAnimationsRoot(const void* InArgs, Job* job) {
 void ParallelUpdateAnimations(Scene& Scene, float dt) {
 	PROFILE_SCOPE(update_anitmations);
 
-	Array<animation_h> workspace(GetMallocAllocator());
+	Array<animation_handle> workspace(GetMallocAllocator());
 	Reserve(workspace, 512);
 
 	for (auto animHandle : Scene.AnimationStates.Keys()) {
@@ -203,7 +203,7 @@ void UpdateScene(Scene &Scene, float dt) {
 }
 
 struct ParallelRenderSceneRange_Payload {
-	Array<scene_entity_h>const*			pEntityHandles;
+	Array<scene_entity_handle>const*			pEntityHandles;
 	u32									from;
 	u32									to;
 	Scene*								pScene;
@@ -301,7 +301,7 @@ void ParallelRenderSceneRoot(const void* InArgs, Job* job) {
 void ParallelRenderScene(GPUQueue* queue, Scene &Scene, forward_render_scene_setup const* setup) {
 	PROFILE_SCOPE(render_scene);
 
-	Array<scene_entity_h> workspace(GetMallocAllocator());
+	Array<scene_entity_handle> workspace(GetMallocAllocator());
 	Reserve(workspace, 2048);
 
 	for (auto entityHandle : Scene.Entities.Keys()) {

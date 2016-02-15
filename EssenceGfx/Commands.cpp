@@ -87,6 +87,10 @@ void GetD3D12StateDefaults(D3D12_RASTERIZER_DESC *pDest) {
 	*pDest = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
 }
 
+void GetD3D12StateDefaults(D3D12_DEPTH_STENCIL_DESC *pDest) {
+	*pDest = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+}
+
 bool IsDepthReadOnly(D3D12_GRAPHICS_PIPELINE_STATE_DESC const* desc) {
 	return
 		desc->DepthStencilState.DepthEnable == false ||
@@ -1516,7 +1520,7 @@ void WaitForCompletion(GPUQueue* queue, u64 fenceValue) {
 		}
 
 		VerifyHr(queue->D12Fence->SetEventOnCompletion(fenceValue, SyncEvent));
-		WaitForSingleObject(SyncEvent, 1);
+		WaitForSingleObject(SyncEvent, INFINITE);
 	}
 }
 
@@ -1769,23 +1773,6 @@ root_signature_t GetRootSignature(D3D12_ROOT_SIGNATURE_DESC const& desc,
 	Array<D3D12_ROOT_PARAMETER> const* params
 	) {
 	Array<D3D12_STATIC_SAMPLER_DESC> samplers(GetThreadScratchAllocator());
-	/*D3D12_STATIC_SAMPLER_DESC sampler;
-	sampler.ShaderRegister = 0;
-	sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-	sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	sampler.MipLODBias = 0;
-	sampler.MaxAnisotropy = 16;
-	sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-	sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
-	sampler.MinLOD = 0.f;
-	sampler.MaxLOD = D3D12_FLOAT32_MAX;
-	sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-	sampler.RegisterSpace = 0;
-	PushBack(samplers, sampler);
-	desc.pStaticSamplers = samplers.DataPtr;
-	desc.NumStaticSamplers = (u32)Size(samplers);*/
 
 	// hash only content, not pointers!
 	u64 rootHash = 0;
@@ -2016,6 +2003,11 @@ bool GetInputBindingSlots(
 				bindInfo.type = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 			}
 			break;
+		}
+
+		const u32 STATIC_SAMPERS_REG = 0;
+		if (bindDesc.Type == D3D_SIT_SAMPLER && bindDesc.BindPoint < 1) {
+			continue;
 		}
 
 		if (Contains(inputDict, bindInfo.name)) {
@@ -2347,11 +2339,28 @@ public:
 			rootParamsArray[i].DescriptorTable.NumDescriptorRanges = offsetsArray[i].num;
 		}
 
+		D3D12_STATIC_SAMPLER_DESC sampler;
+		sampler.ShaderRegister = 0;
+		sampler.Filter = D3D12_FILTER_ANISOTROPIC;
+		sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		sampler.MipLODBias = 0;
+		sampler.MaxAnisotropy = 16;
+		sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+		sampler.MinLOD = 0.f;
+		sampler.MaxLOD = D3D12_FLOAT32_MAX;
+		sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		sampler.RegisterSpace = 0;
+
 		D3D12_ROOT_SIGNATURE_DESC rootDesc;
 		rootDesc.NumParameters = (u32)Size(rootParamsArray);
 		rootDesc.pParameters = rootParamsArray.DataPtr;
-		rootDesc.NumStaticSamplers = 0;
-		rootDesc.pStaticSamplers = nullptr;
+		rootDesc.NumStaticSamplers = 1;
+		rootDesc.pStaticSamplers = &sampler;
+		/*rootDesc.NumStaticSamplers = 0;
+		rootDesc.pStaticSamplers = nullptr;*/
 		rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS |
@@ -2846,7 +2855,7 @@ void SetRenderTarget(GPUCommandList* list, u32 index, resource_rtv_t rtv) {
 		list->Graphics.NumRenderTargets = maxIndex + 1;
 	}
 
-	list->Graphics.CommitedRS = 0;
+	list->Graphics.CommitedRT = 0;
 	list->Graphics.CommitedPipeline = 0;
 }
 
@@ -2893,9 +2902,14 @@ void SetScissorRect(GPUCommandList* list, D3D12_RECT rect) {
 	list->Graphics.ScissorRect = rect;
 }
 
-void SetRasterizer(GPUCommandList* list, D3D12_RASTERIZER_DESC const& desc) {
+void SetRasterizerState(GPUCommandList* list, D3D12_RASTERIZER_DESC const& desc) {
 	list->Graphics.CommitedPipeline = 0;
 	list->Graphics.PipelineDesc.RasterizerState = desc;
+}
+
+void SetDepthStencilState(GPUCommandList* list, D3D12_DEPTH_STENCIL_DESC const& desc) {
+	list->Graphics.CommitedPipeline = 0;
+	list->Graphics.PipelineDesc.DepthStencilState = desc;
 }
 
 void SetBlendState(GPUCommandList* list, u32 index, D3D12_RENDER_TARGET_BLEND_DESC const& desc) {
@@ -3105,7 +3119,7 @@ void SetRootParams(GPUCommandList* list) {
 				&kv.value.binding.table.cpu_handle, &param.table.cbv_range_offset,
 				// only up to cbv 
 				param.table.cbv_range_offset,
-				list->Root.SrcDescRanges.DataPtr + kv.value.src_array_offset, &param.table.cbv_range_offset,
+				list->Root.SrcDescRanges.DataPtr + kv.value.src_array_offset, list->Root.SrcDescRangeSizes.DataPtr + kv.value.src_array_offset,
 				D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
 			if (kv.value.constants_commited == 0) {
@@ -3252,7 +3266,7 @@ void	SetVertexStream(GPUCommandList* list, u32 index, buffer_location_t stream) 
 	else {
 		list->Graphics.VertexStreamsNum--;
 
-		for (auto i = index - 1; i >= 0; --i) {
+		for (i32 i = index - 1; i >= 0; --i) {
 			if (list->Graphics.VertexStreams[index].BufferLocation != 0) {
 				break;
 			}

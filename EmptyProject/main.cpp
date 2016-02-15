@@ -101,7 +101,7 @@ void Tick(float fDeltaTime) {
 
 	ImGui::ShowTestWindow();
 
-	ShowMemoryInfo();
+	ShowMemoryWindow();
 
 	PROFILE_END; // ui logic
 
@@ -111,6 +111,7 @@ void Tick(float fDeltaTime) {
 	CopyResource(drawList, GetCurrentBackbuffer(), RT_A);
 
 	RenderUserInterface(drawList);
+	TransitionBarrier(drawList, Slice(GetCurrentBackbuffer()), D3D12_RESOURCE_STATE_PRESENT);
 	Execute(drawList);
 
 	Present();

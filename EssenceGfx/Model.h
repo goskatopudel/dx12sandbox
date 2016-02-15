@@ -5,14 +5,32 @@
 #include "Collections.h"
 #include "Hash.h"
 
+#include "VectorMath.h"
+
 namespace Essence {
 
 typedef GenericHandle32<20, TYPE_ID(Model)> model_handle;
+
+struct simple_mesh_vertex_t {
+	float3	position;
+	float3	normal;
+	float2	texcoord0;
+};
 
 struct mesh_vertex_t {
 	float3	position;
 	float3	normal;
 	float2	texcoord0;
+	float3	tangent;
+	float3	bitangent;
+};
+
+struct animated_mesh_vertex_t {
+	float3	position;
+	float3	normal;
+	float2	texcoord0;
+	float3	tangent;
+	float3	bitangent;
 	u32		boneIndices;
 	float4	boneWeights;
 };
@@ -39,10 +57,10 @@ struct rotation_key_t {
 };
 
 struct animation_channel_t {
-	u32				position_keys_num;
-	u32				rotation_keys_num;
-	position_key_t*	position_keys;
-	rotation_key_t*	rotation_keys;
+	u32						position_keys_num;
+	u32						rotation_keys_num;
+	position_key_t*			position_keys;
+	rotation_key_t*			rotation_keys;
 };
 
 struct animation_t {
@@ -68,16 +86,22 @@ struct mesh_draw_t {
 };
 
 struct model_t {
-	resource_handle			vertex_buffer;
-	resource_handle			index_buffer;
-	vertex_factory_handle	vertex_layout;
+	resource_handle				vertex_buffer;
+	resource_handle				index_buffer;
+	vertex_factory_handle		vertex_layout;
 
-	u32						vertices_num;
-	u32						indices_num;
+	u32							vertex_stride : 16;
+	u32							index_stride : 16;
 
-	array_view<mesh_draw_t>	submeshes;
-	animation_skeleton_t	skeleton;
-	array_view<animation_t> animations;
+	u32							vertices_num;
+	u32							indices_num;
+
+	array_view<mesh_draw_t>		submeshes;
+	animation_skeleton_t		skeleton;
+	array_view<animation_t>		animations;
+
+	array_view<Vec3f>			raw_positions;
+	array_view<u32>				raw_indices;
 };
 
 void FreeModelsMemory();
@@ -86,6 +110,7 @@ void LoadModel(ResourceNameId name);
 void InitAnimationState(animation_state_t*, model_t const*, u32);
 void FreeAnimationState(animation_state_t* AnimationState);
 
+// todo-consistency: provide comand list to do the copy on
 model_handle		GetModel(ResourceNameId);
 model_t const*		GetModelRenderData(model_handle);
 

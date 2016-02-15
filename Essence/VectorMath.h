@@ -50,7 +50,7 @@ template <typename T> struct Vector<T, 2> {
 		y = vy;
 	}
 
-	Vector(T* va) {
+	Vector(const T* va) {
 		x = va[0];
 		y = va[1];
 	}
@@ -95,7 +95,7 @@ template <typename T> struct Vector<T, 3> {
 		z = vz;
 	}
 
-	Vector(T* va) {
+	Vector(const T* va) {
 		x = va[0];
 		y = va[1];
 		z = va[2];
@@ -155,7 +155,7 @@ template <typename T> struct Vector<T, 4> {
 		w = vw;
 	}
 
-	Vector(T* va) {
+	Vector(const T* va) {
 		x = va[0];
 		y = va[1];
 		z = va[2];

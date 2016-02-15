@@ -565,7 +565,7 @@ void Tick(float fDeltaTime) {
 
 	ImGui::ShowTestWindow();
 
-	ShowMemoryInfo();
+	ShowMemoryWindow();
 
 	PROFILE_END; // ui logic
 

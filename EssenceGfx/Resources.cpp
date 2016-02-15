@@ -462,7 +462,19 @@ resource_handle	CreateTexture(
 			}
 		}
 
-		GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations));
+		if (textureFlags & TEX_CUBEMAP) {
+			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+			srvDesc.Format = format;
+			srvDesc.TextureCube.MipLevels = (textureFlags & TEX_MIPMAPPED) ? 0 : 1;
+			srvDesc.TextureCube.MostDetailedMip = 0;
+			srvDesc.TextureCube.ResourceMinLODClamp = 0;
+			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations));
+		}
+		else {
+			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations));
+		}
 
 		ResourcesFastTable[handle.GetIndex()].srv = ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations);
 	}

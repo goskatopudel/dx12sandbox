@@ -78,7 +78,8 @@ void						SetShaderState	(GPUCommandList*, shader_handle vs, shader_handle ps, v
 void						SetComputeShaderState(GPUCommandList*, shader_handle cs);
 void						SetTopology(GPUCommandList*, D3D_PRIMITIVE_TOPOLOGY topology);
 void						SetRenderTarget(GPUCommandList*, u32 index, resource_rtv_t);
-void						SetRasterizer(GPUCommandList*, D3D12_RASTERIZER_DESC const& desc);
+void						SetRasterizerState(GPUCommandList*, D3D12_RASTERIZER_DESC const& desc);
+void						SetDepthStencilState(GPUCommandList*, D3D12_DEPTH_STENCIL_DESC const& desc);
 void						SetBlendState(GPUCommandList*, u32 index, D3D12_RENDER_TARGET_BLEND_DESC const& desc);
 void						SetDepthStencil(GPUCommandList*, resource_dsv_t);
 void						SetViewport(GPUCommandList*, float width, float height, float x = 0, float y = 0, float minDepth = 0, float maxDepth = 1);
@@ -99,6 +100,7 @@ template<typename T> void	SetConstant(GPUCommandList* list, TextId var, T const&
 }
 
 void						GetD3D12StateDefaults(D3D12_RASTERIZER_DESC *pDest);
+void						GetD3D12StateDefaults(D3D12_DEPTH_STENCIL_DESC *pDest);
 void						FlushShaderChanges();
 
 
