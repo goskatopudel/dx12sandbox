@@ -73,22 +73,22 @@ Array<scene_object_t> SceneObjects;
 
 void InitScene() {
 	Vec4f rotation;
-	XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&rotation), XMQuaternionRotationAxis(XMVectorSet(1, 0, 0, 0), XM_PI));
+	XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&rotation), XMQuaternionRotationAxis(XMVectorSet(0, 1, 0, 0), XM_PIDIV2));
 
-	scene_object_t plane_0 = {};
-	plane_0.model = GetModel(NAME_("Models/plane.obj"));
-	plane_0.scale = 300.f;
-	plane_0.position = Vec3f(0);
-	plane_0.rotation_quat = Vec4f(0, 0, 0, 1); // rotate x 90
-	plane_0.material = MakeDefaultMaterial();
+	scene_object_t door = {};
+	door.model = GetModel(NAME_("Models/cube.obj"));
+	door.scale = 50.f;
+	door.position = Vec3f(0, -50.f, 0);
+	door.rotation_quat = Vec4f(0, 0, 0, 1);
+	door.material = MakeDefaultMaterial();
 
-	PushBack(SceneObjects, plane_0);
+	PushBack(SceneObjects, door);
 
 	scene_object_t plane_1 = {};
-	plane_1.model = GetModel(NAME_("Models/plane.obj"));
-	plane_1.scale = 300.f;
-	plane_1.position = Vec3f(0, 0, 300.f);
-	plane_1.rotation_quat = Vec4f(0, 0, 0, 1);// rotate x 90
+	plane_1.model = GetModel(NAME_("Models/wall.doorway.thin.fbx"));
+	plane_1.scale = 10;
+	plane_1.position = Vec3f(0, 5.5f, 30.f);
+	plane_1.rotation_quat = rotation;
 	plane_1.material = MakeDefaultMaterial();
 
 	PushBack(SceneObjects, plane_1);
@@ -97,8 +97,8 @@ void InitScene() {
 		for (int x = 0; x < 7; x++) {
 			scene_object_t matTester = {};
 			matTester.model = GetModel(NAME_("Models/MatTester.obj"));
-			matTester.scale = 1;
-			matTester.position = Vec3f(-160.f + 2 * 160.f / 7 * x, 0, -160.f + 2 * 160.f / 7 * y) + Vec3f(0, 0, 50);
+			matTester.scale = 0.1f;
+			matTester.position = Vec3f(-16.f + 2 * 16.f / 7 * x, 0, -16.f + 2 * 16.f / 7 * y) + Vec3f(0, 0, 5);
 			matTester.rotation_quat = Vec4f(0, 0, 0, 1);
 			matTester.material = MakeDefaultMaterial();
 			matTester.material.roughness_mult = (float)x / 7.f;
@@ -107,7 +107,50 @@ void InitScene() {
 			PushBack(SceneObjects, matTester);
 		}
 	}
-	
+
+	random_generator RNG;
+
+	model_handle models[] = {
+		GetModel(NAME_("Models/wall.window.thin.fbx")),
+		GetModel(NAME_("Models/wall.cross.thin.fbx")),
+		GetModel(NAME_("Models/wall.T.thin.fbx")),
+		GetModel(NAME_("Models/wall.thin.fbx")),
+		GetModel(NAME_("Models/pyramid.fbx")),
+	};
+
+	float scales[] = { 2.f, 3.f, 4.f };
+
+	auto rotations_quat = [] (u32 axis, float angle) {
+		Vec4f q;
+		XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&q), XMQuaternionRotationAxis(XMVectorSet(axis == 0, axis == 1, axis == 2, 0), angle));
+		return q;
+	};
+
+	Vec4f rotations[] = {
+		rotations_quat(1, XM_PIDIV4 * 0),
+		rotations_quat(1, XM_PIDIV4 * 1),
+		rotations_quat(1, XM_PIDIV4 * 2),
+		rotations_quat(1, XM_PIDIV4 * 3),
+		rotations_quat(1, XM_PIDIV4 * 4),
+		rotations_quat(1, XM_PIDIV4 * 5),
+		rotations_quat(1, XM_PIDIV4 * 6),
+		rotations_quat(1, XM_PIDIV4 * 7),
+	};
+
+	for (int y = 0; y < 8; y++) {
+		for (int x = 0; x < 4; x++) {
+			scene_object_t figure = {};
+			figure.model = models[RNG.u32Next() % _countof(models)];
+			figure.scale = scales[RNG.u32Next() % _countof(scales)];
+			figure.position = Vec3f(20.f + x * 40.f / 5.f, figure.scale * 0.5f, -43.f + 180.f * y / 15.f);
+			figure.rotation_quat = rotations[RNG.u32Next() % _countof(rotations)];
+			figure.material = MakeDefaultMaterial();
+			figure.material.roughness_mult = (float)0.5f;
+			figure.material.metalness_mult = 0.f;
+
+			PushBack(SceneObjects, figure);
+		}
+	}
 }
 
 struct directinal_light_def_t {
@@ -126,13 +169,13 @@ void CreateScreenResources() {
 	auto x = GDisplaySettings.resolution.x;
 	auto y = GDisplaySettings.resolution.y;
 
-	DepthBuffer = CreateTexture(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth_buffer");
+	DepthBuffer = CreateTexture2D(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth_buffer");
 	// COLOR, METALNESS
-	GBufferA = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "GBufferA");
+	GBufferA = CreateTexture2D(x, y, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "GBufferA");
 	// NORMAL, ROUGHNESS
-	GBufferB = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM, ALLOW_RENDER_TARGET, "GBufferB");
+	GBufferB = CreateTexture2D(x, y, DXGI_FORMAT_R8G8B8A8_UNORM, ALLOW_RENDER_TARGET, "GBufferB");
 	// 
-	LBuffer = CreateTexture(x, y, DXGI_FORMAT_R16G16B16A16_FLOAT, ALLOW_RENDER_TARGET, "LBuffer");
+	LBuffer = CreateTexture2D(x, y, DXGI_FORMAT_R16G16B16A16_FLOAT, ALLOW_RENDER_TARGET, "LBuffer");
 }
 
 void Init() {
@@ -146,7 +189,7 @@ void Init() {
 	SphereModel = GetModel(NAME_("Models/cylinder.fbx"));
 	MatTesterModel = GetModel(NAME_("Models/MatTester.obj"));
 
-	WhiteTex = CreateTexture(1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, NO_TEXTURE_FLAGS, "White");
+	WhiteTex = CreateTexture2D(1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, NO_TEXTURE_FLAGS, "White");
 	const u32 whiteData = 0xFFFFFFFF;
 	D3D12_SUBRESOURCE_DATA data = {};
 	data.pData = &whiteData;
@@ -154,7 +197,7 @@ void Init() {
 	data.SlicePitch = sizeof(u32);
 	CopyFromCpuToSubresources(initialCopies, Slice(WhiteTex), 1, &data);
 
-	FlatNormalmapTex = CreateTexture(1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, NO_TEXTURE_FLAGS, "FlatNormalmap");
+	FlatNormalmapTex = CreateTexture2D(1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, NO_TEXTURE_FLAGS, "FlatNormalmap");
 	const u32 flatNormalmapData = 0xFFFF7F7F;
 	data = {};
 	data.pData = &flatNormalmapData;
@@ -361,7 +404,7 @@ void Tick(float fDeltaTime) {
 	SetConstant(drawList, TEXT_("View"), viewMatrix);
 	SetConstant(drawList, TEXT_("InvView"), invViewMatrix);
 	SetConstant(drawList, TEXT_("LightIntensity"), float3(1,1,1));
-	SetConstant(drawList, TEXT_("LightDirection"), float3(0, -1, 0));
+	SetConstant(drawList, TEXT_("LightDirection"), normalize(Vec3f(1,-2,1)));
 	Draw(drawList, 3);
 
 	// skybox

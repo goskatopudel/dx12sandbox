@@ -27,7 +27,7 @@ void CreateScreenResources() {
 	auto x = GDisplaySettings.resolution.x;
 	auto y = GDisplaySettings.resolution.y;
 
-	RT_A = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "rt0", float4(0, 0, 0, 1));
+	RT_A = CreateTexture2D(x, y, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ALLOW_RENDER_TARGET, "rt0", float4(0, 0, 0, 1));
 }
 
 void ReloadCodeFromDLL(cstr dllpath);

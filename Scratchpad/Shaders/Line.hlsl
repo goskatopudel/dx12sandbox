@@ -28,3 +28,20 @@ float4 PShader2D(VOut interpolated) : SV_TARGET
 {
 	return interpolated.color;
 }
+
+VOut VShader3D(VIn input)
+{
+	VOut output;
+
+	float4 position = input.position;
+	position = mul(position, ViewProj);
+	output.position = position;
+	output.color = input.color;
+
+	return output;
+}
+
+float4 PShader3D(VOut interpolated) : SV_TARGET
+{
+	return interpolated.color;
+}

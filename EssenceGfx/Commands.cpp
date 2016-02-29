@@ -57,15 +57,15 @@ bool IsExclusiveState(D3D12_RESOURCE_STATES state) {
 	}
 }
 
-bool NeedStateChange(GPUQueueTypeEnum queueType, ResourceHeapType heapType, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after, bool exclusive = false) {
+bool NeedStateChange(GPUQueueEnum queueType, ResourceHeapType heapType, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after, bool exclusive = false) {
 	if (heapType != DEFAULT_MEMORY) {
 		return false;
 	}
 
-	if (queueType == DIRECT_QUEUE) {
+	if (queueType == GPUQueueEnum::Direct) {
 		return (after != before) && ((after & before) == 0 || exclusive);
 	}
-	else if (queueType == COPY_QUEUE) {
+	else if (queueType == GPUQueueEnum::Copy) {
 		return false;
 	}
 
@@ -73,7 +73,7 @@ bool NeedStateChange(GPUQueueTypeEnum queueType, ResourceHeapType heapType, D3D1
 	return false;
 }
 
-D3D12_RESOURCE_STATES GetNextState(GPUQueueTypeEnum queueType, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+D3D12_RESOURCE_STATES GetNextState(GPUQueueEnum queueType, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
 	if (IsExclusiveState(after) || IsExclusiveState(before)) {
 		return after;
 	}
@@ -477,16 +477,18 @@ D3D12_INPUT_LAYOUT_DESC	GetInputLayoutDesc(vertex_factory_handle handle) {
 	return{};
 }
 
-D3D12_COMMAND_LIST_TYPE GetD12QueueType(GPUQueueTypeEnum type) {
+D3D12_COMMAND_LIST_TYPE GetD12QueueType(GPUQueueEnum type) {
 	switch (type) {
-	case COMPUTE_QUEUE:
+	case GPUQueueEnum::Compute:
 		return D3D12_COMMAND_LIST_TYPE_COMPUTE;
-	case COPY_QUEUE:
+	case GPUQueueEnum::Copy:
 		return D3D12_COMMAND_LIST_TYPE_COPY;
-	case DIRECT_QUEUE:
-	default:
+	case GPUQueueEnum::Direct:
 		return D3D12_COMMAND_LIST_TYPE_DIRECT;
+	default:
+		Check(0);
 	}
+	return D3D12_COMMAND_LIST_TYPE_DIRECT;
 }
 
 struct GPUFence {
@@ -530,14 +532,14 @@ public:
 	Hashmap<ResourceNameId, GPUCommandAllocatorPool*>	CommandAllocatorPools;
 
 	// data
-	GPUQueueTypeEnum	Type;
+	GPUQueueEnum		Type;
 	u32					AdapterIndex;
 	u64					FenceValue;
 	u64					LastSignaledValue;
 	GPUFenceHandle		LastSignaledFence;
 	char				DebugName[64];
 
-	GPUQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex);
+	GPUQueue(TextId name, GPUQueueEnum type, u32 adapterIndex);
 	~GPUQueue();
 
 	u64					GetCompletedValue();
@@ -609,13 +611,13 @@ public:
 	OwningComPtr<ID3D12CommandAllocator>	D12CommandAllocator;
 	//
 	ResourceNameId				Usage;
-	GPUQueueTypeEnum			Type;
+	GPUQueueEnum				Type;
 	Array<GPUFenceHandle>		Fences;
 	GPUCommandAllocatorPool*	Pool;
 	u32							ListsRecorded;
 	CommandAllocatorStateEnum	State;
 
-	GPUCommandAllocator(GPUQueueTypeEnum type, ResourceNameId usage, GPUCommandAllocatorPool* pool) :
+	GPUCommandAllocator(GPUQueueEnum type, ResourceNameId usage, GPUCommandAllocatorPool* pool) :
 		Type(type),
 		Usage(usage),
 		Pool(pool),
@@ -997,7 +999,7 @@ public:
 	}
 };
 
-GPUQueue::GPUQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex) :
+GPUQueue::GPUQueue(TextId name, GPUQueueEnum type, u32 adapterIndex) :
 	Type(type),
 	AdapterIndex(adapterIndex),
 	FenceValue(1),
@@ -1020,7 +1022,7 @@ GPUQueue::GPUQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex) :
 	Verify(strncat_s(DebugName, GetString(name), _TRUNCATE) == 0);
 
 #if GPU_PROFILING
-	if (Type != COPY_QUEUE) {
+	if (Type != GPUQueueEnum::Copy) {
 		decltype(*Profiler) pprofiler;
 		_new(pprofiler);
 		Profiler.Reset(pprofiler, GetMallocAllocator());
@@ -1049,7 +1051,7 @@ void GPUQueue::EndFrame() {
 	}
 
 #if GPU_PROFILING
-	if (Type != COPY_QUEUE) {
+	if (Type != GPUQueueEnum::Copy) {
 		Profiler->ReadbackAndFeedProfiler();
 
 		auto cl = GetCommandList(this, NAME_("patchup"));
@@ -1471,7 +1473,7 @@ void Execute(GPUCommandList* list) {
 	}
 }
 
-GPUQueue*		CreateQueue(TextId name, GPUQueueTypeEnum type, u32 adapterIndex) {
+GPUQueue*		CreateQueue(TextId name, GPUQueueEnum type, u32 adapterIndex) {
 	GPUQueue* queue;
 	_new(queue, name, type, adapterIndex);
 	PushBack(GPUQueues, queue);
@@ -1723,22 +1725,31 @@ void ClearRenderTarget(GPUCommandList* list, resource_rtv_t rtv, float4 color) {
 	list->D12CommandList->ClearRenderTargetView(rtv.cpu_descriptor, c, 0, nullptr);
 }
 
-void ClearUnorderedAccess(GPUCommandList* list, resource_uav_t uav) {
+void ClearUnorderedAccess(GPUCommandList* list, resource_uav_t uav, float4 val) {
 	list->ResourcesStateTracker.Transition(uav.slice, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	list->ResourcesStateTracker.FireBarriers();
-	u32 values[4] = { 0, 0, 0, 0 };
+	float values[4] = { val.x, val.y, val.z, val.w };
+	auto viewAlloc = GpuDescriptorsAllocator.AllocateTemporary(1);
+	GD12Device->CopyDescriptorsSimple(1, GetCPUHandle(viewAlloc), uav.cpu_descriptor, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	list->D12CommandList->ClearUnorderedAccessViewFloat(GetGPUHandle(viewAlloc), uav.cpu_descriptor, GetResourceFast(uav.slice.handle)->resource, values, 0, nullptr);
+}
+
+void ClearUnorderedAccess(GPUCommandList* list, resource_uav_t uav, u32 val) {
+	list->ResourcesStateTracker.Transition(uav.slice, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	list->ResourcesStateTracker.FireBarriers();
+	u32 values[4] = { val, val, val, val };
 	auto viewAlloc = GpuDescriptorsAllocator.AllocateTemporary(1);
 	GD12Device->CopyDescriptorsSimple(1, GetCPUHandle(viewAlloc), uav.cpu_descriptor, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	list->D12CommandList->ClearUnorderedAccessViewUint(GetGPUHandle(viewAlloc), uav.cpu_descriptor, GetResourceFast(uav.slice.handle)->resource, values, 0, nullptr);
 }
 
-void ClearDepthStencil(GPUCommandList* list, resource_dsv_t dsv, ClearDepthFlagEnum flags, float depth, u8 stencil, u32 numRects, D3D12_RECT* rects) {
+void ClearDepthStencil(GPUCommandList* list, resource_dsv_t dsv, ClearDSEnum flags, float depth, u8 stencil, u32 numRects, D3D12_RECT* rects) {
 	list->ResourcesStateTracker.Transition(dsv.slice, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 	list->ResourcesStateTracker.FireBarriers();
 
 	auto access = DSV_WRITE_ALL;
-	access = (flags == CLEAR_STENCIL) ? DSV_READ_ONLY_DEPTH : access;
-	access = (flags == CLEAR_DEPTH) ? DSV_READ_ONLY_STENCIL : access;
+	access = (flags == ClearDSEnum::Stencil) ? DSV_READ_ONLY_DEPTH : access;
+	access = (flags == ClearDSEnum::Depth) ? DSV_READ_ONLY_STENCIL : access;
 	list->D12CommandList->ClearDepthStencilView(dsv.cpu_descriptor, (D3D12_CLEAR_FLAGS)flags, depth, stencil, numRects, rects);
 }
 
@@ -2339,26 +2350,82 @@ public:
 			rootParamsArray[i].DescriptorTable.NumDescriptorRanges = offsetsArray[i].num;
 		}
 
-		D3D12_STATIC_SAMPLER_DESC sampler;
-		sampler.ShaderRegister = 0;
-		sampler.Filter = D3D12_FILTER_ANISOTROPIC;
-		sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-		sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-		sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-		sampler.MipLODBias = 0;
-		sampler.MaxAnisotropy = 16;
-		sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-		sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
-		sampler.MinLOD = 0.f;
-		sampler.MaxLOD = D3D12_FLOAT32_MAX;
-		sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-		sampler.RegisterSpace = 0;
+		D3D12_STATIC_SAMPLER_DESC StaticSamplers[5];
+		StaticSamplers[0].ShaderRegister = 0;
+		StaticSamplers[0].Filter = D3D12_FILTER_ANISOTROPIC;
+		StaticSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[0].MipLODBias = 0;
+		StaticSamplers[0].MaxAnisotropy = 16;
+		StaticSamplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		StaticSamplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+		StaticSamplers[0].MinLOD = 0.f;
+		StaticSamplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+		StaticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		StaticSamplers[0].RegisterSpace = 0;
+
+		StaticSamplers[1].ShaderRegister = 0;
+		StaticSamplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+		StaticSamplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[1].MipLODBias = 0;
+		StaticSamplers[1].MaxAnisotropy = 16;
+		StaticSamplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		StaticSamplers[1].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+		StaticSamplers[1].MinLOD = 0.f;
+		StaticSamplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+		StaticSamplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		StaticSamplers[1].RegisterSpace = 1;
+
+		StaticSamplers[2].ShaderRegister = 0;
+		StaticSamplers[2].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+		StaticSamplers[2].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[2].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[2].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		StaticSamplers[2].MipLODBias = 0;
+		StaticSamplers[2].MaxAnisotropy = 16;
+		StaticSamplers[2].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		StaticSamplers[2].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+		StaticSamplers[2].MinLOD = 0.f;
+		StaticSamplers[2].MaxLOD = D3D12_FLOAT32_MAX;
+		StaticSamplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		StaticSamplers[2].RegisterSpace = 2;
+
+		StaticSamplers[3].ShaderRegister = 0;
+		StaticSamplers[3].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+		StaticSamplers[3].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		StaticSamplers[3].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		StaticSamplers[3].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		StaticSamplers[3].MipLODBias = 0;
+		StaticSamplers[3].MaxAnisotropy = 16;
+		StaticSamplers[3].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		StaticSamplers[3].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+		StaticSamplers[3].MinLOD = 0.f;
+		StaticSamplers[3].MaxLOD = D3D12_FLOAT32_MAX;
+		StaticSamplers[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		StaticSamplers[3].RegisterSpace = 3;
+
+		StaticSamplers[4].ShaderRegister = 0;
+		StaticSamplers[4].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+		StaticSamplers[4].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		StaticSamplers[4].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		StaticSamplers[4].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		StaticSamplers[4].MipLODBias = 0;
+		StaticSamplers[4].MaxAnisotropy = 16;
+		StaticSamplers[4].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		StaticSamplers[4].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+		StaticSamplers[4].MinLOD = 0.f;
+		StaticSamplers[4].MaxLOD = D3D12_FLOAT32_MAX;
+		StaticSamplers[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		StaticSamplers[4].RegisterSpace = 4;
 
 		D3D12_ROOT_SIGNATURE_DESC rootDesc;
 		rootDesc.NumParameters = (u32)Size(rootParamsArray);
 		rootDesc.pParameters = rootParamsArray.DataPtr;
-		rootDesc.NumStaticSamplers = 1;
-		rootDesc.pStaticSamplers = &sampler;
+		rootDesc.NumStaticSamplers = _countof(StaticSamplers);
+		rootDesc.pStaticSamplers = StaticSamplers;
 		/*rootDesc.NumStaticSamplers = 0;
 		rootDesc.pStaticSamplers = nullptr;*/
 		rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
@@ -2959,8 +3026,6 @@ void PreDraw(GPUCommandList* list) {
 		list->Graphics.CommitedRS = 1;
 	}
 
-	SetDescriptorHeaps(list, GpuDescriptorsAllocator.D12DescriptorHeap.Ptr, nullptr);
-
 	SetRootParams(list);
 
 	if (!list->Graphics.CommitedVB || ForceStateChange) {
@@ -3102,6 +3167,7 @@ root_parameter_bind_t* PrepareRootParam(GPUCommandList* list, u64 paramHash) {
 }
 
 void SetRootParams(GPUCommandList* list) {
+	SetDescriptorHeaps(list, GpuDescriptorsAllocator.D12DescriptorHeap.Ptr, nullptr);
 	for (auto kv : list->Root.Params) {
 		if (kv.value.commited == 0) {
 			Check(Contains(list->Bindings->RootParams, kv.key));

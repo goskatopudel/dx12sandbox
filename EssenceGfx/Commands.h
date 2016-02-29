@@ -6,13 +6,14 @@
 #include "Resources.h"
 
 namespace Essence {
+
 class GPUQueue;
 class GPUCommandList;
 
-enum GPUQueueTypeEnum {
-	DIRECT_QUEUE,
-	COMPUTE_QUEUE,
-	COPY_QUEUE
+enum class GPUQueueEnum {
+	Direct,
+	Compute,
+	Copy
 };
 
 struct GPUFenceHandle {
@@ -33,13 +34,13 @@ struct upload_allocation_t {
 	void*			write_ptr;
 };
 
-struct			viewport_t { float x, y, width, height, mindepth, maxdepth; };
+struct						viewport_t { float x, y, width, height, mindepth, maxdepth; };
 
 void						WaitForCompletion();
 void						InitRenderingEngines();
 void						ShutdownRenderingEngines();
 
-GPUQueue*					CreateQueue(TextId name, GPUQueueTypeEnum type = DIRECT_QUEUE, u32 adapterIndex = 0);
+GPUQueue*					CreateQueue(TextId name, GPUQueueEnum type = GPUQueueEnum::Direct, u32 adapterIndex = 0);
 ID3D12CommandQueue*			GetD12Queue(GPUQueue* queue);
 void						WaitForCompletion(GPUQueue* queue);
 
@@ -64,16 +65,17 @@ void						TransitionBarrier(GPUCommandList*, resource_slice_t slice, D3D12_RESOU
 void						FlushBarriers(GPUCommandList*);
 void						ClearRenderTarget(GPUCommandList*, resource_rtv_t, float4 = float4(0, 0, 0, 0));
 
-enum ClearDepthFlagEnum {
-	CLEAR_DEPTH = 1,
-	CLEAR_STENCIL = 2,
-	CLEAR_ALL = 3 
+enum class ClearDSEnum {
+	Depth = 1,
+	Stencil = 2,
+	All = 3 
 };
 
 void						GPUBeginProfiling(GPUCommandList*, cstr label, u32* rmt_name_hash);
 void						GPUEndProfiling(GPUCommandList*);
-void						ClearDepthStencil(GPUCommandList*, resource_dsv_t, ClearDepthFlagEnum flags = CLEAR_ALL, float depth = 1.f, u8 stencil = 0, u32 numRects = 0, D3D12_RECT* rects = nullptr);
-void						ClearUnorderedAccess(GPUCommandList*, resource_uav_t);
+void						ClearDepthStencil(GPUCommandList*, resource_dsv_t, ClearDSEnum flag = ClearDSEnum::All, float depth = 1.f, u8 stencil = 0, u32 numRects = 0, D3D12_RECT* rects = nullptr);
+void						ClearUnorderedAccess(GPUCommandList*, resource_uav_t, float4 val);
+void						ClearUnorderedAccess(GPUCommandList* list, resource_uav_t uav, u32 val);
 void						SetShaderState	(GPUCommandList*, shader_handle vs, shader_handle ps, vertex_factory_handle vertexFactory);
 void						SetComputeShaderState(GPUCommandList*, shader_handle cs);
 void						SetTopology(GPUCommandList*, D3D_PRIMITIVE_TOPOLOGY topology);

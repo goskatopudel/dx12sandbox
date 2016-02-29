@@ -246,3 +246,13 @@ typedef Matrix<float, 3, 3> Matrix3x3f;
 typedef Matrix<float, 3, 4> Matrix3x4f;
 typedef Matrix<float, 4, 4> Matrix4x4f;
 
+template<typename T> TCos(T v);
+template<typename T> TSin(T v);
+
+template<typename float> TCos(float v) {
+	return cosf(v);
+}
+
+template<typename float> TSin(float v) {
+	return sinf(v);
+}

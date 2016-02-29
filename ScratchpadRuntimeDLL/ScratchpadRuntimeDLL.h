@@ -13,8 +13,11 @@
 #include "../Essence/VectorMath.h"
 
 using DrawLine2DFunc = void(*)(Vec2f P0, Vec2f P1, Color4b C0, Color4b C1);
+using DrawLine3DFunc = void(*)(Vec3f P0, Vec3f P1, Color4b C0, Color4b C1);
+
 struct ScratchpadInterface {
 	DrawLine2DFunc DrawLine2D;
+	DrawLine3DFunc DrawLine3D;
 };
 
 using ScratchpadUpdateInterfaceFunc = void(*)(ScratchpadInterface);

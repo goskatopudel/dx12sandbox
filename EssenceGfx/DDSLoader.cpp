@@ -234,6 +234,35 @@ static size_t BitsPerPixel(_In_ DXGI_FORMAT fmt)
 	}
 }
 
+DXGI_FORMAT MakeSRGB(_In_ DXGI_FORMAT format)
+{
+	switch (format)
+	{
+	case DXGI_FORMAT_R8G8B8A8_UNORM:
+		return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+
+	case DXGI_FORMAT_BC1_UNORM:
+		return DXGI_FORMAT_BC1_UNORM_SRGB;
+
+	case DXGI_FORMAT_BC2_UNORM:
+		return DXGI_FORMAT_BC2_UNORM_SRGB;
+
+	case DXGI_FORMAT_BC3_UNORM:
+		return DXGI_FORMAT_BC3_UNORM_SRGB;
+
+	case DXGI_FORMAT_B8G8R8A8_UNORM:
+		return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+
+	case DXGI_FORMAT_B8G8R8X8_UNORM:
+		return DXGI_FORMAT_B8G8R8X8_UNORM_SRGB;
+
+	case DXGI_FORMAT_BC7_UNORM:
+		return DXGI_FORMAT_BC7_UNORM_SRGB;
+
+	default:
+		return format;
+	}
+}
 
 //--------------------------------------------------------------------------------------
 // Get surface information for a particular format
@@ -835,11 +864,13 @@ static resource_load_result_t CreateTextureFromDDS(
 	resourceDesc.SampleDesc.Quality = 0;
 	resourceDesc.Dimension = (D3D12_RESOURCE_DIMENSION)resDim;
 
+	format = MakeSRGB(format);
+
 	auto flags = ((srvDimension == D3D12_SRV_DIMENSION_TEXTURECUBE || srvDimension == D3D12_SRV_DIMENSION_TEXTURECUBEARRAY) ? TEX_CUBEMAP : NO_TEXTURE_FLAGS)
 		| (mipCount > 1 ? TEX_MIPMAPPED : NO_TEXTURE_FLAGS);
 
 	out.result = ResourceLoadEnum::Success;
-	out.resource = CreateTexture(width, (u32)height, (u32)arraySize, format, flags, GetString(debugName));
+	out.resource = CreateTexture(width, (u32)height, (u32)arraySize, format, format, format, flags, GetString(debugName));
 
 	CopyFromCpuToSubresources(commandList, Slice(out.resource), (u32)Size(initData), initData.DataPtr);
 

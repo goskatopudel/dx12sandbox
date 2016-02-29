@@ -43,9 +43,9 @@ void CreateScreenResources() {
 	auto x = GDisplaySettings.resolution.x;
 	auto y = GDisplaySettings.resolution.y;
 
-	SceneColor = CreateTexture(x, y, DXGI_FORMAT_R8G8B8A8_UNORM, ALLOW_RENDER_TARGET, "scene_color", float4(0.1f, 0.1f, 0.1f, 1.f));
-	ShadowLOD = CreateTexture(x, y, DXGI_FORMAT_R8_UINT, ALLOW_RENDER_TARGET, "shadow_lod");
-	DepthBuffer = CreateTexture(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth");
+	SceneColor = CreateTexture2D(x, y, DXGI_FORMAT_R8G8B8A8_UNORM, ALLOW_RENDER_TARGET, "scene_color", float4(0.1f, 0.1f, 0.1f, 1.f));
+	ShadowLOD = CreateTexture2D(x, y, DXGI_FORMAT_R8_UINT, ALLOW_RENDER_TARGET, "shadow_lod");
+	DepthBuffer = CreateTexture2D(x, y, DXGI_FORMAT_R24G8_TYPELESS, ALLOW_DEPTH_STENCIL, "depth");
 }
 
 #include "Ringbuffer.h"
@@ -264,11 +264,11 @@ void Init() {
 	SetPosition(testScene, hairball, float3(50, 0, 0));*/
 	CreateScreenResources();
 	FpsCamera.setup(float3(0, 0, -50), float3(0, 0, 1));
-	LowResSM = CreateTexture(128, 128, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL, "low_res_sm");
-	VirtualSM = CreateTexture(16384, 16384, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL | TEX_MIPMAPPED | TEX_VIRTUAL, "virtual_sm");
-	PagesNeeded = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, ALLOW_UNORDERED_ACCESS | TEX_MIPMAPPED, "vsm_pages");
+	LowResSM = CreateTexture2D(128, 128, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL, "low_res_sm");
+	VirtualSM = CreateTexture2D(16384, 16384, DXGI_FORMAT_R32_TYPELESS, ALLOW_DEPTH_STENCIL | TEX_MIPMAPPED | TEX_VIRTUAL, "virtual_sm");
+	PagesNeeded = CreateTexture2D(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, ALLOW_UNORDERED_ACCESS | TEX_MIPMAPPED, "vsm_pages");
 	for (u32 i = 0; i < _countof(PagesNeededPrev); ++i) {
-		PagesNeededPrev[i] = CreateTexture(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, TEX_MIPMAPPED, "vsm_pages_prev");
+		PagesNeededPrev[i] = CreateTexture2D(16384 / 128, 16384 / 128, DXGI_FORMAT_R32_UINT, TEX_MIPMAPPED, "vsm_pages_prev");
 	}
 
 	for (auto i : MakeRange(_countof(PagesCPU))) {
@@ -578,7 +578,7 @@ void Tick(float fDeltaTime) {
 	ClearRenderTarget(depthCL, GetRTV(SceneColor), float4(0.1f, 0.1f, 0.1f, 1.f));
 	ClearDepthStencil(depthCL, GetDSV(DepthBuffer));
 	ClearDepthStencil(depthCL, GetDSV(LowResSM));
-	ClearUnorderedAccess(depthCL, GetUAV(PagesNeeded));
+	ClearUnorderedAccess(depthCL, GetUAV(PagesNeeded), float4(0,0,0,0));
 
 	xmvec lightDirection = XMVector3Normalize(XMVectorSet(1, 2, 1, 0));
 	xmmatrix shadowmapMatrix;
@@ -594,7 +594,7 @@ void Tick(float fDeltaTime) {
 	shadowmapMatrix = XMMatrixTranspose(shadowmapMatrix);
 
 	for (auto i : MakeRange(GetResourceInfo(VirtualSM)->subresources_num)) {
-		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i), CLEAR_DEPTH);
+		ClearDepthStencil(depthCL, GetDSV(VirtualSM, i), ClearDSEnum::Depth);
 	}
 
 	PROFILE_BEGIN(prepass);

@@ -119,8 +119,8 @@ void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum fla
 	InitRenderingEngines();
 	InitResources();
 
-	GGPUMainQueue = CreateQueue(TEXT_("3d_engine"), DIRECT_QUEUE);
-	GGPUCopyQueue = CreateQueue(TEXT_("copy_engine"), COPY_QUEUE);
+	GGPUMainQueue = CreateQueue(TEXT_("3d_engine"), GPUQueueEnum::Direct);
+	GGPUCopyQueue = CreateQueue(TEXT_("copy_engine"), GPUQueueEnum::Copy);
 
 	CreateSwapChain(GetD12Queue(GGPUMainQueue));
 
@@ -157,7 +157,7 @@ void InitApplication(u32 windowWidth, u32 windowHeight, ApplicationFlagsEnum fla
 	imageData.RowPitch = sizeof(u32) * width;
 	imageData.SlicePitch = sizeof(u32) * width * height;
 
-	auto fontsTexture = CreateTexture(width, height, DXGI_FORMAT_R8G8B8A8_UNORM, NO_TEXTURE_FLAGS, "font_texture");
+	auto fontsTexture = CreateTexture2D(width, height, DXGI_FORMAT_R8G8B8A8_UNORM, NO_TEXTURE_FLAGS, "font_texture");
 	CopyFromCpuToSubresources(GGPUCopyQueue, Slice(fontsTexture), 1, &imageData);
 	io.Fonts->TexID = HandleToImGuiTexID(fontsTexture);
 

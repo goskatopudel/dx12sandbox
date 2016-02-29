@@ -101,8 +101,8 @@ struct subresource_read_info_t {
 	DXGI_FORMAT	format;
 };
 
-resource_handle	CreateTexture(u64 width, u32 height, u32 depthOrArraySize, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
-resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
+resource_handle	CreateTexture(u64 width, u32 height, u32 depthOrArraySize, DXGI_FORMAT format, DXGI_FORMAT writeFormat, DXGI_FORMAT readFormat, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0);
+resource_handle	CreateTexture2D(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor = float4(0, 0, 0, 0), float clearDepth = 1.f, u8 clearStencil = 0, DXGI_FORMAT writeFormat = DXGI_FORMAT_UNKNOWN, DXGI_FORMAT readFormat = DXGI_FORMAT_UNKNOWN);
 resource_handle	CreateBuffer(ResourceHeapType heapType, u64 size, BufferFlags flags, const char* debugName);
 void			CopyToBuffer(GPUCommandList* list, resource_handle dstBuffer, const void* dataPtr, u64 size);
 void			CopyFromCpuToSubresources(GPUCommandList* list, resource_slice_t dstResource, u32 subresourcesNum, D3D12_SUBRESOURCE_DATA const* subresourcesData);
@@ -191,6 +191,8 @@ resource_uav_t			GetUAV(resource_handle resource, u32 mipmap);
 
 resource_srv_t			GetSRV(resource_handle resource);
 resource_srv_t			GetSRV(resource_handle resource, u32 mipmap);
+
+resource_srv_t			CreateCustomSrv(resource_handle resource, DXGI_FORMAT fmt);
 
 void					Delete(resource_handle);
 void					DeregisterSwapChainBuffers();

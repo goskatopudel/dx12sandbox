@@ -177,6 +177,30 @@ u32 CalcSubresource(resource_handle resource, u32 mipmap) {
 	return subresource;
 }
 
+resource_srv_t			CreateCustomSrv(resource_handle resource, DXGI_FORMAT fmt) {
+	auto allocation = ViewDescHeap.Allocate(1);
+
+	auto info = GetResourceInfo(resource);
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Format = fmt;
+	srvDesc.Texture2D.MipLevels = 1;
+	srvDesc.Texture2D.MostDetailedMip = -1;
+	srvDesc.Texture2D.ResourceMinLODClamp = 0;
+	srvDesc.Texture2D.PlaneSlice = 0;
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+	GD12Device->CreateShaderResourceView(ResourcesTable[resource].resource, &srvDesc, ToCPUHandle(allocation));
+
+	resource_srv_t srv = {};
+	srv.slice = Slice(resource);
+	srv.cpu_descriptor = GetCPUHandle(allocation);
+	srv.fixed_state = GetResourceFast(resource)->is_read_only;
+
+	return srv;
+}
+
 resource_rtv_t			GetRTV(resource_handle resource) {
 	resource_rtv_t rtv = {};
 
@@ -385,10 +409,11 @@ resource_handle CreateCommittedResource(D3D12_RESOURCE_DESC const* desc, Resourc
 
 resource_handle	CreateTexture(
 	u64 width, u32 height, u32 depthOrArraySize,
-	DXGI_FORMAT format, 
+	DXGI_FORMAT format, DXGI_FORMAT writeFormat, DXGI_FORMAT readFormat,
 	TextureFlags textureFlags, 
 	const char* debugName, 
-	float4 clearColor, float clearDepth, u8 clearStencil) {
+	float4 clearColor, float clearDepth, u8 clearStencil
+	) {
 
 	Check(!((textureFlags & ALLOW_RENDER_TARGET) && (textureFlags & ALLOW_DEPTH_STENCIL)));
 
@@ -409,7 +434,7 @@ resource_handle	CreateTexture(
 		;
 
 	D3D12_CLEAR_VALUE clearValue;
-	clearValue.Format = format;
+	clearValue.Format = writeFormat;
 	bool needsClearValue = false;
 	if (textureFlags & ALLOW_DEPTH_STENCIL) {
 		needsClearValue = true;
@@ -439,7 +464,10 @@ resource_handle	CreateTexture(
 
 	ResourcesFastTable[handle.GetIndex()].is_read_only = readOnly;
 
-	u64 planeSize = width * height;
+	u32 mipmaps = subresourcesNum / depthOrArraySize;
+	if (!(textureFlags & TEX_MIPMAPPED)) {
+		Check(mipmaps == 1);
+	}
 
 	if (!(textureFlags & ALLOW_DEPTH_STENCIL)) {
 		if (!(textureFlags & TEX_MIPMAPPED)) {
@@ -451,11 +479,11 @@ resource_handle	CreateTexture(
 			for (auto subIndex : MakeRange(subresourcesNum)) {
 				D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 				srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-				srvDesc.Format = format;
+				srvDesc.Format = readFormat;
 				srvDesc.Texture2D.MipLevels = 1;
-				srvDesc.Texture2D.MostDetailedMip = subIndex % planeSize;
+				srvDesc.Texture2D.MostDetailedMip = subIndex % mipmaps;
 				srvDesc.Texture2D.ResourceMinLODClamp = 0;
-				srvDesc.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
+				srvDesc.Texture2D.PlaneSlice = (u32)(subIndex / mipmaps);
 				srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 				GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, subIndex + 1));
@@ -465,15 +493,24 @@ resource_handle	CreateTexture(
 		if (textureFlags & TEX_CUBEMAP) {
 			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
-			srvDesc.Format = format;
-			srvDesc.TextureCube.MipLevels = (textureFlags & TEX_MIPMAPPED) ? 0 : 1;
+			srvDesc.Format = readFormat;
+			srvDesc.TextureCube.MipLevels = mipmaps;
 			srvDesc.TextureCube.MostDetailedMip = 0;
 			srvDesc.TextureCube.ResourceMinLODClamp = 0;
 			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations));
 		}
 		else {
-			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations));
+			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Format = readFormat;
+			srvDesc.Texture2D.MipLevels = mipmaps;
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.ResourceMinLODClamp = 0;
+			srvDesc.Texture2D.PlaneSlice = 0;
+			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations));
 		}
 
 		ResourcesFastTable[handle.GetIndex()].srv = ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations);
@@ -512,9 +549,9 @@ resource_handle	CreateTexture(
 			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 			srvDesc.Format = GetDepthReadFormat(format);
 			srvDesc.Texture2D.MipLevels = 1;
-			srvDesc.Texture2D.MostDetailedMip = subIndex % planeSize;
+			srvDesc.Texture2D.MostDetailedMip = subIndex % mipmaps;
 			srvDesc.Texture2D.ResourceMinLODClamp = 0;
-			srvDesc.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
+			srvDesc.Texture2D.PlaneSlice = (u32)(subIndex / mipmaps);
 			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 			GD12Device->CreateShaderResourceView(ResourcesTable[handle].resource, &srvDesc, ToCPUHandle(ResourcesViews[handle.GetIndex()].srv_locations, viewsPerSubresource * (subIndex + 1) + VIEW_DEPTH));
@@ -538,15 +575,22 @@ resource_handle	CreateTexture(
 
 			for (auto subIndex : MakeRange(subresourcesNum)) {
 				D3D12_RENDER_TARGET_VIEW_DESC rtvView = {};
-				rtvView.Format = format;
+				rtvView.Format = writeFormat;
 				rtvView.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-				rtvView.Texture2D.MipSlice = subIndex % planeSize;
-				rtvView.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
+				rtvView.Texture2D.MipSlice = subIndex % mipmaps;
+				rtvView.Texture2D.PlaneSlice = (u32)(subIndex / mipmaps);
 
 				GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, &rtvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations, subIndex));
 			}
 		}
-		GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations));
+
+		D3D12_RENDER_TARGET_VIEW_DESC rtvView = {};
+		rtvView.Format = writeFormat;
+		rtvView.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+		rtvView.Texture2D.MipSlice = 0;
+		rtvView.Texture2D.PlaneSlice = 0;
+
+		GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, &rtvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations));
 	}
 	if (textureFlags & ALLOW_UNORDERED_ACCESS) {
 		if (!(textureFlags & TEX_MIPMAPPED)) {
@@ -557,16 +601,21 @@ resource_handle	CreateTexture(
 
 			for (auto subIndex : MakeRange(subresourcesNum)) {
 				D3D12_UNORDERED_ACCESS_VIEW_DESC uavView = {};
-				uavView.Format = format;
+				uavView.Format = writeFormat;
 				uavView.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-				uavView.Texture2D.MipSlice = subIndex % planeSize;
-				uavView.Texture2D.PlaneSlice = (u32)(subIndex / planeSize);
+				uavView.Texture2D.MipSlice = subIndex % mipmaps;
+				uavView.Texture2D.PlaneSlice = (u32)(subIndex / mipmaps);
 
 				GD12Device->CreateUnorderedAccessView(ResourcesTable[handle].resource, nullptr, &uavView, ToCPUHandle(ResourcesViews[handle.GetIndex()].uav_locations, subIndex));
 			}
 		}
 
-		GD12Device->CreateUnorderedAccessView(ResourcesTable[handle].resource, nullptr, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].uav_locations));
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uavView = {};
+		uavView.Format = writeFormat;
+		uavView.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+		uavView.Texture2D.MipSlice = 0;
+		uavView.Texture2D.PlaneSlice = 0;
+		GD12Device->CreateUnorderedAccessView(ResourcesTable[handle].resource, nullptr, &uavView, ToCPUHandle(ResourcesViews[handle.GetIndex()].uav_locations));
 	}
 	if (textureFlags & ALLOW_DEPTH_STENCIL) {
 		Check(GetDepthStencilFormat(format) != DXGI_FORMAT_UNKNOWN);
@@ -632,8 +681,8 @@ resource_handle	CreateTexture(
 	return handle;
 }
 
-resource_handle	CreateTexture(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor, float clearDepth, u8 clearStencil) {
-	return CreateTexture(width, height, (textureFlags & TEX_CUBEMAP) ? 6u : 1u, format, textureFlags, debugName, clearColor, clearDepth, clearStencil);
+resource_handle	CreateTexture2D(u32 width, u32 height, DXGI_FORMAT format, TextureFlags textureFlags, const char* debugName, float4 clearColor, float clearDepth, u8 clearStencil, DXGI_FORMAT writeFormat, DXGI_FORMAT readFormat) {
+	return CreateTexture(width, height, (textureFlags & TEX_CUBEMAP) ? 6u : 1u, format, writeFormat ? writeFormat : format, readFormat ? readFormat : format, textureFlags, debugName, clearColor, clearDepth, clearStencil);
 }
 
 const u32			MAX_SWAP_BUFFERS = 8;
@@ -662,7 +711,7 @@ void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 	// we will call release when deleting entry & when shutting down device
 	resource->AddRef();
 	Record.debug_name = TEXT_(debugName);
-	Record.desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	Record.desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 
 	ResourcesFastTable[handle.GetIndex()].resource = resource;
 	
@@ -672,7 +721,13 @@ void	RegisterSwapChainBuffer(ID3D12Resource* resource, u32 index) {
 	ResourcesTransitionTable[handle.GetIndex()].heap_type = DEFAULT_MEMORY;
 
 	ResourcesViews[handle.GetIndex()].rtv_locations = RTVDescHeap.Allocate(1);
-	GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, nullptr, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations));
+
+	D3D12_RENDER_TARGET_VIEW_DESC rtvView = {};
+	rtvView.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+	rtvView.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+	rtvView.Texture2D.MipSlice = 0;
+	rtvView.Texture2D.PlaneSlice = 0;
+	GD12Device->CreateRenderTargetView(ResourcesTable[handle].resource, &rtvView, ToCPUHandle(ResourcesViews[handle.GetIndex()].rtv_locations));
 
 	GSwapBuffers[index] = handle;
 }
